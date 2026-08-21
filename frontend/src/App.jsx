@@ -4,8 +4,9 @@ import bgImage from "./assets/background.png";
 import KidneyModel from "./CKDCalculatorWidget";
 import "./App.css";
 
-const API_URL =
-  import.meta.env.VITE_API_URL || "";
+// Fixed API URL configuration: safely trims any accidental trailing slashes
+const RAW_API_URL = import.meta.env.VITE_API_URL || "";
+const API_URL = RAW_API_URL.replace(/\/+$/, "");
 
 /* =========================================================
    LANGUAGE
@@ -194,6 +195,11 @@ export default function App() {
   const latestMessageRef = useRef(null);
   const recognitionRef = useRef(null);
   const inputValRef = useRef(input);
+
+  useEffect(() => {
+    // Debug helper to check your connected API target in console
+    console.log("MedCreative Active API URL target:", API_URL || "(Empty - pointing to local relative route)");
+  }, []);
 
   useEffect(() => {
     inputValRef.current = input;
