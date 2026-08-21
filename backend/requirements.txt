@@ -6,6 +6,7 @@ langchain-groq
 langchain-chroma
 langchain-huggingface
 langchain-core
+langchain-openai
 rank-bm25
 sentence-transformers
 chromadb
