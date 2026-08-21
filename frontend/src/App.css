@@ -1,4 +1,4 @@
-* *::before, *::after {
+*::before, *::after {
   box-sizing: border-box;
 }
 
@@ -351,7 +351,7 @@ body, html {
   border-left: 5px solid #10b981;
 }
 
-/* Responsive bot content wrapper: flex column on mobile, grid side-by-side on large screens */
+/* Responsive bot content wrapper: grid side-by-side on large screens */
 .bot-bubble-content-wrapper {
   display: flex !important;
   flex-direction: column !important;
@@ -445,13 +445,13 @@ body, html {
 }
 
 @media (min-width: 1024px) {
-  /* On large screens, bypass accordion styling or let it function as a permanent sidebar block if desired */
+  /* On large screens, bypass accordion wrapper so it permanently functions as a clean right-side column */
   .right-panel-dropdown-container details {
     background: transparent;
     border: none;
   }
   .right-panel-dropdown-header {
-    display: none; /* Hide header on widescreen if you want it permanently open */
+    display: none; 
   }
   .right-panel-stack {
     width: 300px !important;
