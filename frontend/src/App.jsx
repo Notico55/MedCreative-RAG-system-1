@@ -5,7 +5,7 @@ import KidneyModel from "./CKDCalculatorWidget";
 import "./App.css";
 
 const API_URL =
-  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+  import.meta.env.VITE_API_URL || "";
 
 /* =========================================================
    LANGUAGE
@@ -172,7 +172,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   const [retrievalK, setRetrievalK] = useState(5);
-  const [scoreThreshold, setScoreThreshold] = useState(0.65);
+  const [scoreThreshold, setScoreThreshold] = useState(1.20);
 
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -1057,7 +1057,7 @@ export default function App() {
             </div>
             <div className="control-group">
               <label>Distance Threshold: {scoreThreshold}</label>
-              <input type="range" min="0.1" max="1.5" step="0.05" value={scoreThreshold} onChange={(e) => setScoreThreshold(Number(e.target.value))} style={{ width: "100%" }} />
+              <input type="range" min="0.1" max="2.0" step="0.05" value={scoreThreshold} onChange={(e) => setScoreThreshold(Number(e.target.value))} style={{ width: "100%" }} />
             </div>
           </div>
         </div>

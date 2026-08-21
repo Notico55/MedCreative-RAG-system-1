@@ -57,7 +57,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not GROQ_API_KEY:
     raise RuntimeError(
-        "GROQ_API_KEY not found. Make sure your .env file contains:\n"
+        "GROQ_API_KEY not found. Make sure your environment variables contain:\n"
         "GROQ_API_KEY=your_key_here"
     )
 
@@ -82,21 +82,16 @@ app.add_middleware(
 
 
 # ============================================================
-# 3.1 AUTOMATIC STARTUP INGESTION (RAILWAY CLOUD FIX)
+# 3.1 SERVERLESS SAFE STARTUP CHECK (VERCEL CLOUD FIX)
 # ============================================================
 
 @app.on_event("startup")
 def startup_event():
     db_path = "./chroma_db"
     if not os.path.exists(db_path) or not os.listdir(db_path):
-        logger.info("Chroma database not found or empty. Running ingest.py automatically...")
-        try:
-            import ingest
-            logger.info("Automatic ingestion completed successfully on startup!")
-        except Exception as e:
-            logger.error(f"Error during automatic ingestion on startup: {e}")
+        logger.info("Chroma database not found or empty. Running on serverless environment; ensure chroma_db is pre-built.")
     else:
-        logger.info("Chroma database found. Skipping automatic ingestion.")
+        logger.info("Chroma database found and loaded successfully.")
 
 
 # ============================================================
