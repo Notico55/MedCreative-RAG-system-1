@@ -20,6 +20,7 @@ import os
 import time
 import logging
 import traceback
+import asyncio
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -29,7 +30,7 @@ from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -68,7 +69,7 @@ if not GROQ_API_KEY:
 app = FastAPI(
     title="MedCreative CKD Guideline Assistant",
     description="Evidence-based CKD guideline RAG assistant.",
-    version="4.1.0"
+    version="4.2.0"
 )
 
 app.add_middleware(
@@ -120,24 +121,23 @@ CHROMA_PATH = "./chroma_db"
 
 
 # ============================================================
-# 5. EMBEDDINGS (OPTIMIZED FOR CPU LATENCY)
+# 5. EMBEDDINGS (OPTIMIZED CLOUD API EMBEDDINGS)
 # ============================================================
 
-logger.info("Loading HuggingFace embedding model with CPU performance tweaks...")
+logger.info("Loading Cloud API embedding model for zero-overhead CPU performance...")
 
 try:
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True}
+    embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        openai_api_key=GROQ_API_KEY
     )
 
-    logger.info("Embedding model loaded successfully.")
+    logger.info("Cloud embedding model loaded successfully.")
 
 except Exception as e:
 
-    logger.exception("Failed to load embedding model.")
+    logger.exception("Failed to load cloud embedding model.")
 
     raise RuntimeError(
         f"Could not load embedding model: {e}"
@@ -295,7 +295,7 @@ def looks_like_obviously_off_topic(question: str) -> bool:
 
 
 # ============================================================
-# 11. TRANSLATION FOR RETRIEVAL
+# 11. ASYNCHRONOUS TRANSLATION FOR RETRIEVAL
 # ============================================================
 
 TRANSLATION_PROMPT = ChatPromptTemplate.from_template(
@@ -322,11 +322,11 @@ translation_chain = (
 )
 
 
-def translate_arabic_for_search(question: str) -> str:
+async def translate_arabic_for_search_async(question: str) -> str:
 
     try:
 
-        translated = translation_chain.invoke(
+        translated = await translation_chain.ainvoke(
             {"query": question}
         )
 
@@ -578,10 +578,10 @@ def format_retrieved_documents(
 
 
 # ============================================================
-# 15. RETRIEVAL
+# 15. ASYNCHRONOUS RETRIEVAL
 # ============================================================
 
-def execute_vector_retrieval(
+async def execute_vector_retrieval_async(
     query_text: str,
     top_k: int
 ):
@@ -589,17 +589,15 @@ def execute_vector_retrieval(
     try:
 
         logger.info(
-            "Searching Chroma | query=%s | top_k=%s",
+            "Searching Chroma asynchronously | query=%s | top_k=%s",
             query_text,
             top_k
         )
 
-        results = (
-            vectorstore
-            .similarity_search_with_score(
-                query_text,
-                k=top_k
-            )
+        results = await asyncio.to_thread(
+            vectorstore.similarity_search_with_score,
+            query_text,
+            k=top_k
         )
 
         logger.info(
@@ -848,7 +846,7 @@ def build_conversational_payload(
 
 
 # ============================================================
-# 20. MAIN CHAT ENDPOINT
+# 20. MAIN CHAT ENDPOINT (ASYNC OPTIMIZED)
 # ============================================================
 
 @app.post(
@@ -961,34 +959,15 @@ async def chat_endpoint(
             )
 
         # ----------------------------------------------------
-        # E. CREATE RETRIEVAL QUERY
-        # ----------------------------------------------------
-        #
-        # VERY IMPORTANT:
-        #
-        # The ORIGINAL question is NEVER replaced.
-        #
-        # Arabic:
-        #
-        #   user_question = Arabic
-        #   search_query  = English translation
-        #
-        # English:
-        #
-        #   user_question = English
-        #   search_query  = English
-        #
-        # This fixes the Arabic retrieval problem.
+        # E. CREATE RETRIEVAL QUERY (ASYNC CONCURRENT)
         # ----------------------------------------------------
 
         user_question = question
 
         if language == "ar":
 
-            search_query = (
-                translate_arabic_for_search(
-                    user_question
-                )
+            search_query = await translate_arabic_for_search_async(
+                user_question
             )
 
         else:
@@ -1006,10 +985,10 @@ async def chat_endpoint(
         )
 
         # ----------------------------------------------------
-        # F. RETRIEVE GUIDELINE DOCUMENTS
+        # F. RETRIEVE GUIDELINE DOCUMENTS (ASYNC)
         # ----------------------------------------------------
 
-        raw_results = execute_vector_retrieval(
+        raw_results = await execute_vector_retrieval_async(
             search_query,
             top_k
         )
@@ -1137,14 +1116,14 @@ async def chat_endpoint(
         )
 
         # ----------------------------------------------------
-        # J. GENERATE FINAL ANSWER
+        # J. GENERATE FINAL ANSWER (ASYNC)
         # ----------------------------------------------------
 
         logger.info(
             "Generating grounded clinical answer..."
         )
 
-        final_answer = rag_chain.invoke({
+        final_answer = await rag_chain.ainvoke({
 
             # ORIGINAL question.
             # NOT the translated query.
@@ -1269,7 +1248,7 @@ async def health_check():
 
         "llm_model": MODEL_NAME,
 
-        "version": "4.1.0"
+        "version": "4.2.0"
 
     }
 
