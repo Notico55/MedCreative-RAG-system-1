@@ -1,4 +1,4 @@
-*, *::before, *::after {
+* *::before, *::after {
   box-sizing: border-box;
 }
 
@@ -7,7 +7,7 @@ body, html {
   padding: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -134,17 +134,20 @@ body, html {
   color: #0f172a !important;
 }
 
-.page-wrapper.light-theme .sources-dropdown-container details {
+.page-wrapper.light-theme .sources-dropdown-container details,
+.page-wrapper.light-theme .right-panel-dropdown-container details {
   background: #f8fafc;
   border: 1px solid #cbd5e1;
 }
 
-.page-wrapper.light-theme .sources-dropdown-header {
+.page-wrapper.light-theme .sources-dropdown-header,
+.page-wrapper.light-theme .right-panel-dropdown-header {
   background: #e2e8f0;
   color: #0284c7;
 }
 
-.page-wrapper.light-theme .sources-dropdown-content {
+.page-wrapper.light-theme .sources-dropdown-content,
+.page-wrapper.light-theme .right-panel-stack {
   background: #f8fafc;
   border-top: 1px solid #cbd5e1;
 }
@@ -348,12 +351,20 @@ body, html {
   border-left: 5px solid #10b981;
 }
 
+/* Responsive bot content wrapper: flex column on mobile, grid side-by-side on large screens */
 .bot-bubble-content-wrapper {
-  display: grid !important;
-  grid-template-columns: 1fr 300px !important;
-  gap: 24px !important;
-  align-items: start !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 20px !important;
   width: 100% !important;
+}
+
+@media (min-width: 1024px) {
+  .bot-bubble-content-wrapper {
+    display: grid !important;
+    grid-template-columns: 1fr 300px !important;
+    align-items: start !important;
+  }
 }
 
 .report-sections-flow {
@@ -389,13 +400,66 @@ body, html {
   line-height: 1.6;
 }
 
+/* Collapsible Right Panel Container styling */
+.right-panel-dropdown-container {
+  width: 100%;
+  margin-top: 0;
+}
+
+.right-panel-dropdown-container details {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.right-panel-dropdown-header {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #93c5fd;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+  background: rgba(30, 41, 59, 0.5);
+  border: none;
+  font-weight: 600;
+}
+
+.right-panel-dropdown-header:hover {
+  background: rgba(30, 41, 59, 0.8);
+}
+
 .right-panel-stack {
   display: flex !important;
   flex-direction: column !important;
   gap: 12px !important;
-  width: 300px !important;
-  min-width: 300px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.75);
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
   flex-shrink: 0 !important;
+}
+
+@media (min-width: 1024px) {
+  /* On large screens, bypass accordion styling or let it function as a permanent sidebar block if desired */
+  .right-panel-dropdown-container details {
+    background: transparent;
+    border: none;
+  }
+  .right-panel-dropdown-header {
+    display: none; /* Hide header on widescreen if you want it permanently open */
+  }
+  .right-panel-stack {
+    width: 300px !important;
+    min-width: 300px !important;
+    padding: 0;
+    background: transparent;
+    border-top: none;
+  }
 }
 
 .action-buttons-stack {
@@ -445,7 +509,6 @@ body, html {
   background: rgba(59, 130, 246, 1);
 }
 
-/* High visibility fix for Copy Report button */
 .copy-btn {
   background: linear-gradient(135deg, #f59e0b, #d97706) !important;
   border: 1px solid rgba(245, 158, 11, 0.5) !important;
@@ -771,8 +834,6 @@ body, html {
     100% { transform: translateY(0px); }
 }
 
-/* --- Fixed Inline Sidebar Quick Presets Menu --- */
-
 .control-section .preset-menu,
 .sidebar .preset-menu {
   position: static !important;
@@ -812,7 +873,6 @@ body, html {
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
 }
 
-/* Light theme support for preset items */
 .page-wrapper.light-theme .preset-item {
   background: #ffffff !important;
   color: #0f172a !important;

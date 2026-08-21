@@ -175,7 +175,7 @@ export default function App() {
   const [scoreThreshold, setScoreThreshold] = useState(0.65);
 
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true); // Retractable sidebar toggle state
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
   const [presetTab, setPresetTab] = useState("questions");
 
@@ -1131,53 +1131,62 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="right-panel-stack">
-                        <div className="action-buttons-stack" style={{ gap: "6px" }}>
-                          <button
-                            type="button"
-                            className="action-btn translate-btn"
-                            onClick={() => translateMessage(index)}
-                            disabled={message.translating}
-                          >
-                            {message.translating ? "⏳ Translating..." : message.currentLanguage === "ar" ? "🌐 Translate to English" : "🌐 Translate to Arabic"}
-                          </button>
+                      {/* RESPONSIVE COLLAPSIBLE RIGHT PANEL */}
+                      <div className="right-panel-dropdown-container">
+                        <details>
+                          <summary className="right-panel-dropdown-header">
+                            <span>🛡️ Risk & Safety Report</span>
+                            <span className="dropdown-arrow">▼</span>
+                          </summary>
+                          <div className="right-panel-stack">
+                            <div className="action-buttons-stack" style={{ gap: "6px" }}>
+                              <button
+                                type="button"
+                                className="action-btn translate-btn"
+                                onClick={() => translateMessage(index)}
+                                disabled={message.translating}
+                              >
+                                {message.translating ? "⏳ Translating..." : message.currentLanguage === "ar" ? "🌐 Translate to English" : "🌐 Translate to Arabic"}
+                              </button>
 
-                          <button
-                            type="button"
-                            className="action-btn speak-btn"
-                            onClick={() => speakAnswer(message.text, index)}
-                          >
-                            {speakingIndex === index ? "🛑 Stop Reading" : "🔊 Read Aloud"}
-                          </button>
+                              <button
+                                type="button"
+                                className="action-btn speak-btn"
+                                onClick={() => speakAnswer(message.text, index)}
+                              >
+                                {speakingIndex === index ? "🛑 Stop Reading" : "🔊 Read Aloud"}
+                              </button>
 
-                          <button
-                            type="button"
-                            className="action-btn copy-btn"
-                            onClick={() => copyResponseText(message.text, index)}
-                          >
-                            {message.copied ? "✨ Copied!" : "📋 Copy Report"}
-                          </button>
-                        </div>
-
-                        {metrics && !isSmallOutput && (
-                          <div className={`evaluation-metrics-panel ${highRisk ? "panel-risk-high" : "panel-risk-low"}`}>
-                            <div className="metrics-header">🛡️ RISK & SAFETY REPORT</div>
-                            <div className="metrics-grid">
-                              <div className="metric-tag">
-                                Faithfulness: <strong>{faith >= 0.8 ? " 🟢 ✔️" : " 🔴 ❌"} {metrics.faithfulness_score}</strong>
-                              </div>
-                              <div className="metric-tag">
-                                Answer Relevance: <strong>{metrics.answer_relevance_score}</strong>
-                              </div>
-                              <div className="metric-tag">
-                                Context Relevance: <strong>{metrics.context_relevance_score}</strong>
-                              </div>
-                              <div className={`metric-tag ${highRisk ? "risk-high" : "risk-low"}`}>
-                                Risk: <strong>{highRisk ? "High" : metrics.hallucination_risk}</strong>
-                              </div>
+                              <button
+                                type="button"
+                                className="action-btn copy-btn"
+                                onClick={() => copyResponseText(message.text, index)}
+                              >
+                                {message.copied ? "✨ Copied!" : "📋 Copy Report"}
+                              </button>
                             </div>
+
+                            {metrics && !isSmallOutput && (
+                              <div className={`evaluation-metrics-panel ${highRisk ? "panel-risk-high" : "panel-risk-low"}`}>
+                                <div className="metrics-header">🛡️ RISK & SAFETY REPORT</div>
+                                <div className="metrics-grid">
+                                  <div className="metric-tag">
+                                    Faithfulness: <strong>{faith >= 0.8 ? " 🟢 ✔️" : " 🔴 ❌"} {metrics.faithfulness_score}</strong>
+                                  </div>
+                                  <div className="metric-tag">
+                                    Answer Relevance: <strong>{metrics.answer_relevance_score}</strong>
+                                  </div>
+                                  <div className="metric-tag">
+                                    Context Relevance: <strong>{metrics.context_relevance_score}</strong>
+                                  </div>
+                                  <div className={`metric-tag ${highRisk ? "risk-high" : "risk-low"}`}>
+                                    Risk: <strong>{highRisk ? "High" : metrics.hallucination_risk}</strong>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
+                        </details>
                       </div>
                     </div>
                   ) : (
