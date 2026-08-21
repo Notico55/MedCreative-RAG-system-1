@@ -26,7 +26,7 @@ const cleanMarkdown = (text = "") =>
     .replace(/^[-*]\s?/gm, "");
 
 /* =========================================================
-   QUICK / GUARANTEED CLINICAL ANSWERS
+   QUICK / GUARANTEED CLINICAL ANSWERS (INSTANT LOCAL RESPONSE)
 ========================================================= */
 
 const PRESET_OVERRIDES = {
@@ -432,7 +432,7 @@ export default function App() {
           }
         ]);
         setLoading(false);
-      }, 250);
+      }, 150);
       return;
     }
 
