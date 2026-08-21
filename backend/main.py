@@ -68,7 +68,7 @@ if not GROQ_API_KEY:
 app = FastAPI(
     title="MedCreative CKD Guideline Assistant",
     description="Evidence-based CKD guideline RAG assistant.",
-    version="4.0.0"
+    version="4.1.0"
 )
 
 app.add_middleware(
@@ -102,7 +102,7 @@ def startup_event():
 # 4. CONFIGURATION
 # ============================================================
 
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = 3
 
 # IMPORTANT:
 # Chroma similarity scores are not always directly comparable
@@ -120,20 +120,25 @@ CHROMA_PATH = "./chroma_db"
 
 
 # ============================================================
-# 5. EMBEDDINGS
+# 5. EMBEDDINGS (OPTIMIZED FOR CPU LATENCY)
 # ============================================================
 
-logger.info("Loading HuggingFace embedding model...")
+logger.info("Loading HuggingFace embedding model with CPU performance tweaks...")
 
 try:
+
     embeddings = HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2"
+        model_name="all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True}
     )
 
     logger.info("Embedding model loaded successfully.")
 
 except Exception as e:
+
     logger.exception("Failed to load embedding model.")
+
     raise RuntimeError(
         f"Could not load embedding model: {e}"
     )
@@ -148,6 +153,7 @@ logger.info(
 )
 
 try:
+
     vectorstore = Chroma(
         persist_directory=CHROMA_PATH,
         embedding_function=embeddings
@@ -156,7 +162,9 @@ try:
     logger.info("Chroma database connected successfully.")
 
 except Exception as e:
+
     logger.exception("Failed to connect to Chroma.")
+
     raise RuntimeError(
         f"Could not connect to Chroma database: {e}"
     )
@@ -171,6 +179,7 @@ logger.info(
 )
 
 try:
+
     llm = ChatGroq(
         model_name=MODEL_NAME,
         temperature=TEMPERATURE,
@@ -181,7 +190,9 @@ try:
     logger.info("Groq LLM initialized successfully.")
 
 except Exception as e:
+
     logger.exception("Failed to initialize Groq.")
+
     raise RuntimeError(
         f"Could not initialize Groq: {e}"
     )
@@ -538,15 +549,15 @@ def format_retrieved_documents(
         if not isinstance(metadata, dict):
             metadata = {}
 
-        parent_context = metadata.get(
+        parent_content = metadata.get(
             "parent_content"
         )
 
-        if parent_context:
+        if parent_content:
 
             display_text = (
                 "Broad Parent Context:\n"
-                f"{parent_context}\n\n"
+                f"{parent_content}\n\n"
                 "Specific Guideline Section:\n"
                 f"{content}"
             )
@@ -1258,7 +1269,7 @@ async def health_check():
 
         "llm_model": MODEL_NAME,
 
-        "version": "4.0.0"
+        "version": "4.1.0"
 
     }
 
