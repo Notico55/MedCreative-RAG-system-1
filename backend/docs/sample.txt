@@ -1,0 +1,1 @@
+This is a placeholder document for your RAG system. Replace or add your files here.
