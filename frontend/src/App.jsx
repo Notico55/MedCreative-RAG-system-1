@@ -341,8 +341,8 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
-  // Retractable Right-Side Panel State (Risk & Safety Panel)
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  // Retractable Right-Side Panel State (Closed by default on app load)[cite: 2]
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
 
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
   const [presetTab, setPresetTab] = useState("questions");
@@ -1502,86 +1502,101 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Top Action Buttons (Translation, Audio/Read Aloud, Copy) right above the synthesized answer box */}
+                      {/* Action Buttons & Synthesized Answer Container with Side-by-Side Flex Layout */}
                       <div
                         style={{
                           display: "flex",
-                          flexWrap: "wrap",
-                          gap: "8px",
-                          marginBottom: "12px",
-                          paddingBottom: "10px",
-                          borderBottom: "1px solid rgba(150,150,150,0.2)",
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: "16px",
+                          width: "100%",
                         }}
                       >
-                        <button
-                          type="button"
-                          className="action-btn translate-btn"
-                          onClick={() => translateMessage(index)}
-                          disabled={message.translating}
-                          style={{
-                            padding: "6px 12px",
-                            borderRadius: "8px",
-                            border: "1px solid #0284c7",
-                            background: "rgba(2, 132, 199, 0.1)",
-                            color: isDarkMode ? "#38bdf8" : "#0284c7",
-                            fontWeight: "600",
-                            cursor: "pointer",
-                            fontSize: "0.85rem",
-                          }}
-                        >
-                          {message.translating
-                            ? "⏳ Translating..."
-                            : message.currentLanguage === "ar"
-                            ? "🌐 Translate to English"
-                            : "🌐 Translate to Arabic"}
-                        </button>
-                        <button
-                          type="button"
-                          className="action-btn speak-btn"
-                          onClick={() => speakAnswer(message.text, index)}
-                          style={{
-                            padding: "6px 12px",
-                            borderRadius: "8px",
-                            border: "1px solid #059669",
-                            background: "rgba(5, 150, 105, 0.1)",
-                            color: isDarkMode ? "#34d399" : "#059669",
-                            fontWeight: "600",
-                            cursor: "pointer",
-                            fontSize: "0.85rem",
-                          }}
-                        >
-                          {speakingIndex === index ? "🛑 Stop Reading" : "🔊 Read Aloud"}
-                        </button>
-                        <button
-                          type="button"
-                          className="action-btn copy-btn"
-                          onClick={() => copyResponseText(message.text, index)}
-                          style={{
-                            padding: "6px 12px",
-                            borderRadius: "8px",
-                            border: "1px solid #64748b",
-                            background: "rgba(100, 116, 139, 0.1)",
-                            color: isDarkMode ? "#cbd5e1" : "#475569",
-                            fontWeight: "600",
-                            cursor: "pointer",
-                            fontSize: "0.85rem",
-                          }}
-                        >
-                          {message.copied ? "✨ Copied!" : "📋 Copy Report"}
-                        </button>
-                      </div>
-
-                      <div className="report-sections-flow">
-                        <div className="report-section-block" style={{ width: "fit-content" }}>
-                          <div className="report-section-title">📌 Synthesized Answer</div>
-                          <div
-                            className="formatted-answer-box"
-                            dir={message.currentLanguage === "ar" ? "rtl" : "ltr"}
-                          >
-                            {message.isConversational
-                              ? message.text
-                              : formatAnswer(message.text)}
+                        {/* Output box on the left */}
+                        <div className="report-sections-flow" style={{ flex: 1, minWidth: 0 }}>
+                          <div className="report-section-block" style={{ width: "fit-content" }}>
+                            <div className="report-section-title">📌 Synthesized Answer</div>
+                            <div
+                              className="formatted-answer-box"
+                              dir={message.currentLanguage === "ar" ? "rtl" : "ltr"}
+                            >
+                              {message.isConversational
+                                ? message.text
+                                : formatAnswer(message.text)}
+                            </div>
                           </div>
+                        </div>
+
+                        {/* Action buttons on the right (hidden on desktop via CSS class / media query if needed, or structured dynamically) */}
+                        <div
+                          className="desktop-action-buttons-wrapper"
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "8px",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="action-btn translate-btn mobile-hidden-action-btn"
+                            onClick={() => translateMessage(index)}
+                            disabled={message.translating}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: "8px",
+                              border: "1px solid #0284c7",
+                              background: "rgba(2, 132, 199, 0.1)",
+                              color: isDarkMode ? "#38bdf8" : "#0284c7",
+                              fontWeight: "600",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {message.translating
+                              ? "⏳ Translating..."
+                              : message.currentLanguage === "ar"
+                              ? "🌐 Translate to English"
+                              : "🌐 Translate to Arabic"}
+                          </button>
+                          <button
+                            type="button"
+                            className="action-btn speak-btn mobile-hidden-action-btn"
+                            onClick={() => speakAnswer(message.text, index)}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: "8px",
+                              border: "1px solid #059669",
+                              background: "rgba(5, 150, 105, 0.1)",
+                              color: isDarkMode ? "#34d399" : "#059669",
+                              fontWeight: "600",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {speakingIndex === index ? "🛑 Stop Reading" : "🔊 Read Aloud"}
+                          </button>
+                          <button
+                            type="button"
+                            className="action-btn copy-btn mobile-hidden-action-btn"
+                            onClick={() => copyResponseText(message.text, index)}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: "8px",
+                              border: "1px solid #64748b",
+                              background: "rgba(100, 116, 139, 0.1)",
+                              color: isDarkMode ? "#cbd5e1" : "#475569",
+                              fontWeight: "600",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {message.copied ? "✨ Copied!" : "📋 Copy Report"}
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1731,7 +1746,7 @@ export default function App() {
         </form>
       </main>
 
-      {/* Retractable Right-Side Panel (Risk & Safety Report) */}
+      {/* Retractable Right-Side Panel (Risk & Safety Report + Mobile-Only Action Buttons) */}
       <aside
         style={{
           width: "320px",
@@ -1763,6 +1778,83 @@ export default function App() {
           >
             ✕
           </button>
+        </div>
+
+        {/* Mobile-Only Action Buttons Section inside the Right Retractable Panel */}
+        <div className="mobile-only-actions-section" style={{ display: "none", marginBottom: "20px", paddingBottom: "15px", borderBottom: "1px solid rgba(150,150,150,0.2)" }}>
+          <div style={{ fontWeight: "bold", marginBottom: "10px", fontSize: "0.9rem" }}>
+            📱 Response Actions (Mobile):
+          </div>
+          {messages.length > 0 && messages[messages.length - 1].sender === "bot" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {(() => {
+                const latestBotIndex = messages.length - 1;
+                const latestMsg = messages[latestBotIndex];
+                return (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => translateMessage(latestBotIndex)}
+                      disabled={latestMsg.translating}
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid #0284c7",
+                        background: "rgba(2, 132, 199, 0.1)",
+                        color: isDarkMode ? "#38bdf8" : "#0284c7",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        textAlign: "left",
+                      }}
+                    >
+                      {latestMsg.translating
+                        ? "⏳ Translating..."
+                        : latestMsg.currentLanguage === "ar"
+                        ? "🌐 Translate to English"
+                        : "🌐 Translate to Arabic"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => speakAnswer(latestMsg.text, latestBotIndex)}
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid #059669",
+                        background: "rgba(5, 150, 105, 0.1)",
+                        color: isDarkMode ? "#34d399" : "#059669",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        textAlign: "left",
+                      }}
+                    >
+                      {speakingIndex === latestBotIndex ? "🛑 Stop Reading" : "🔊 Read Aloud"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyResponseText(latestMsg.text, latestBotIndex)}
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid #64748b",
+                        background: "rgba(100, 116, 139, 0.1)",
+                        color: isDarkMode ? "#cbd5e1" : "#475569",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        textAlign: "left",
+                      }}
+                    >
+                      {latestMsg.copied ? "✨ Copied!" : "📋 Copy Report"}
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          ) : (
+            <div style={{ fontSize: "0.8rem", opacity: 0.6 }}>No active bot message available.</div>
+          )}
         </div>
 
         <p style={{ fontSize: "0.85rem", opacity: 0.8, marginBottom: "20px" }}>
@@ -1807,6 +1899,19 @@ export default function App() {
           </div>
         )}
       </aside>
+
+      {/* Inline Responsive Styles for Mobile-Only Action Controls */}
+      <style>{`
+        @media (max-width: 768px) {
+          .mobile-hidden-action-btn {
+            display: none !important;
+          }
+          .mobile-only-actions-section {
+            display: flex !important;
+            flex-direction: column !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

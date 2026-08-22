@@ -1,3 +1,6 @@
+/* ========================================================
+   BASE & RESET STYLES
+   ======================================================== */
 *::before, *::after {
   box-sizing: border-box;
 }
@@ -15,6 +18,7 @@ body, html {
   display: flex;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   max-width: 100vw;
   max-height: 100vh;
   overflow: hidden;
@@ -23,6 +27,9 @@ body, html {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* ========================================================
+   THEME: DARK THEME
+   ======================================================== */
 .page-wrapper.dark-theme {
   background: 
     linear-gradient(135deg, rgba(7, 11, 25, 0.85), rgba(13, 27, 62, 0.9)), 
@@ -62,6 +69,9 @@ body, html {
   color: #ffffff !important;
 }
 
+/* ========================================================
+   THEME: LIGHT THEME
+   ======================================================== */
 .page-wrapper.light-theme {
   background: #f1f5f9;
   color: #0f172a;
@@ -167,17 +177,23 @@ body, html {
   color: #475569;
 }
 
+/* ========================================================
+   SIDEBAR LAYOUT
+   ======================================================== */
 .sidebar {
   width: 280px;
   min-width: 280px;
   height: 100vh;
+  height: 100dvh;
   backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   box-sizing: border-box;
   padding: 24px;
   overflow-y: auto;
+  z-index: 10;
 }
 
 .sidebar-header {
@@ -264,11 +280,15 @@ body, html {
   margin: 0;
 }
 
+/* ========================================================
+   MAIN APP CONTAINER & HEADER
+   ======================================================== */
 .app-container {
   display: flex;
   flex-direction: column;
   flex: 1;
   height: 100vh;
+  height: 100dvh;
   min-width: 0;
   width: calc(100vw - 280px);
   background: transparent;
@@ -278,7 +298,9 @@ body, html {
 .dashboard-header {
   padding: 20px 32px;
   backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   width: 100%;
+  box-sizing: border-box;
 }
 
 .dashboard-header h1 {
@@ -294,6 +316,9 @@ body, html {
   color: #94a3b8;
 }
 
+/* ========================================================
+   CHAT FEED & MESSAGES
+   ======================================================== */
 .chat-box {
   flex: 1;
   padding: 24px 32px;
@@ -303,6 +328,7 @@ body, html {
   flex-direction: column;
   gap: 20px;
   width: 100%;
+  box-sizing: border-box;
 }
 
 .message-row {
@@ -327,6 +353,7 @@ body, html {
   font-size: 14px;
   line-height: 1.5;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
 }
 
 .user-bubble {
@@ -340,6 +367,7 @@ body, html {
 
 .bot-bubble {
   backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   border-bottom-left-radius: 2px;
   width: 100%;
@@ -351,6 +379,9 @@ body, html {
   border-left: 5px solid #10b981;
 }
 
+/* ========================================================
+   BOT BUBBLE GRID LAYOUT (Content vs Right Panel Stack)
+   ======================================================== */
 .bot-bubble-content-wrapper {
   display: flex !important;
   flex-direction: column !important;
@@ -399,6 +430,9 @@ body, html {
   line-height: 1.6;
 }
 
+/* ========================================================
+   RIGHT PANEL STACK & DROPDOWNS
+   ======================================================== */
 .right-panel-dropdown-container {
   width: 100%;
   margin-top: 0;
@@ -424,6 +458,7 @@ body, html {
   background: rgba(30, 41, 59, 0.7);
   border: none;
   font-weight: 600;
+  box-sizing: border-box;
 }
 
 .right-panel-dropdown-header:hover {
@@ -440,6 +475,7 @@ body, html {
   background: rgba(15, 23, 42, 0.9);
   border-top: 1px solid rgba(255, 255, 255, 0.15);
   flex-shrink: 0 !important;
+  box-sizing: border-box;
 }
 
 @media (min-width: 1024px) {
@@ -460,7 +496,7 @@ body, html {
 }
 
 /* ========================================================
-   ACTION BUTTONS ROW (Translate, Speak, Copy) - RESPONSIVE & SIDE-BY-SIDE
+   ACTION BUTTONS ROW
    ======================================================== */
 .action-buttons-stack {
   display: flex;
@@ -515,7 +551,7 @@ body, html {
 }
 
 /* ========================================================
-   EVALUATION METRICS & RISK LEVEL STYLING PANELS
+   EVALUATION METRICS & RISK LEVEL PANELS
    ======================================================== */
 .evaluation-metrics-panel {
   width: 100%;
@@ -527,8 +563,10 @@ body, html {
   border: 1px solid rgba(255, 255, 255, 0.25);
   background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
   transition: all 0.3s ease;
+  box-sizing: border-box;
 }
 
 .panel-risk-low {
@@ -587,6 +625,9 @@ body, html {
   color: #f87171;
 }
 
+/* ========================================================
+   TYPOGRAPHY & LIST FORMATTING
+   ======================================================== */
 .normal-line {
   margin-bottom: 6px;
 }
@@ -614,6 +655,9 @@ body, html {
   margin-right: 4px;
 }
 
+/* ========================================================
+   SOURCES DROPDOWN CONTAINER
+   ======================================================== */
 .sources-dropdown-container {
   margin-top: 12px;
   width: 100%;
@@ -639,6 +683,7 @@ body, html {
   background: rgba(30, 41, 59, 0.7);
   border: none;
   font-weight: 600;
+  box-sizing: border-box;
 }
 
 .sources-dropdown-header:hover {
@@ -683,11 +728,15 @@ body, html {
   margin-top: 4px;
 }
 
+/* ========================================================
+   CHAT FORM & CONTROLS INPUTS
+   ======================================================== */
 .chat-form {
   display: flex;
   flex-direction: column;
   padding: 20px 32px;
   backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   gap: 8px;
   width: 100%;
   box-sizing: border-box;
@@ -716,6 +765,7 @@ body, html {
   font-size: 14px;
   outline: none;
   transition: all 0.2s ease;
+  box-sizing: border-box;
 }
 
 .chat-input:focus {
@@ -734,6 +784,7 @@ body, html {
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
   transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
 .chat-button:hover {
@@ -759,6 +810,7 @@ body, html {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .mic-btn:hover {
@@ -799,6 +851,9 @@ body, html {
   to { transform: rotate(360deg); }
 }
 
+/* ========================================================
+   FLOATING CAPSULE & PRESETS
+   ======================================================== */
 .floating-glass-capsule {
   position: fixed;
   bottom: 30px;
@@ -860,6 +915,7 @@ body, html {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2) !important;
   display: block !important;
   width: 100% !important;
+  box-sizing: border-box !important;
 }
 
 .preset-item:hover {
@@ -873,7 +929,7 @@ body, html {
 .page-wrapper.light-theme .preset-item {
   background: #ffffff !important;
   color: #0f172a !important;
-  border:  1px solid #cbd5e1 !important;
+  border: 1px solid #cbd5e1 !important;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
 }
 
@@ -897,13 +953,13 @@ body, html {
     width: 100%;
     min-width: 100%;
     height: auto;
-    max-height: 40vh;
+    max-height: 35vh;
   }
   
   .app-container {
     width: 100vw;
-    height: 100vh;
-    height: 100dvh;
+    height: 65vh;
+    height: 65dvh;
   }
   
   .chat-box {
