@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm install && npm run build",
     "start-backend": "cd backend && python -m uvicorn main:app --reload --port 8000"
   },
   "dependencies": {

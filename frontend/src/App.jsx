@@ -5,39 +5,215 @@ import KidneyModel from "./CKDCalculatorWidget";
 import "./App.css";
 
 /* =========================================================
-   VERCEL / API CONFIGURATION
+   MEDCREATIVE API CONFIGURATION & HARDENING LAYERS
    ========================================================= */
 
-const RAW_API_URL = import.meta.env.VITE_API_URL || "";
-const API_URL = RAW_API_URL.replace(/\/+$/, "");
+const PRIMARY_RAILWAY_BACKEND =
+  "https://medcreative-rag-system-1-production.up.railway.app";
 
-/*
-  When VITE_API_URL is empty:
-    1. Try /api/chat
-    2. If that is a 404, try /chat
+const FALLBACK_BACKEND_URLS = [
+  PRIMARY_RAILWAY_BACKEND,
+  // Backup / mirror endpoint layers for redundancy
+];
 
-  This lets the same frontend work with:
-    - Vercel /api/chat serverless functions
-    - Vercel rewrites such as /chat -> backend/main.py
-*/
-const API_ENDPOINTS = API_URL
-  ? [`${API_URL}/chat`]
-  : ["/api/chat", "/chat"];
+const isBrowser = typeof window !== "undefined";
+const isProduction = import.meta.env.PROD;
+
+const cleanBaseUrl = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (
+    raw === "VITE_API_URL" ||
+    raw === "VITE_BACKEND_URL" ||
+    raw === "VITE_RAILWAY_URL" ||
+    raw.includes("YOUR_RAILWAY") ||
+    raw.includes("your-railway")
+  ) {
+    return "";
+  }
+
+  if (
+    isProduction &&
+    /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?/i.test(raw)
+  ) {
+    return "";
+  }
+
+  return raw
+    .replace(/\/api\/chat\/?$/i, "")
+    .replace(/\/chat\/?$/i, "")
+    .replace(/\/+$/, "");
+};
+
+const envApiBase =
+  cleanBaseUrl(import.meta.env.VITE_API_URL) ||
+  cleanBaseUrl(import.meta.env.VITE_BACKEND_URL) ||
+  cleanBaseUrl(import.meta.env.VITE_RAILWAY_URL);
+
+const runtimeApiBase = isBrowser
+  ? cleanBaseUrl(window.__MEDCREATIVE_API_URL__)
+  : "";
+
+const API_BASE_URL =
+  runtimeApiBase ||
+  envApiBase ||
+  PRIMARY_RAILWAY_BACKEND;
+
+// Multi-layered endpoint variations to eliminate 404/Routing errors
+const generateEndpointVariations = (baseUrl) => [
+  `${baseUrl}/chat`,
+  `${baseUrl}/api/chat`,
+];
+
+const API_TIMEOUT_MS = 45000; // Extended timeout for Railway cold starts
+const API_RETRIES = 3;
+
+const sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableStatus = (status) =>
+  status === 404 ||
+  status === 405 ||
+  status === 502 ||
+  status === 503 ||
+  status === 504;
 
 /* =========================================================
-   LANGUAGE
+   RESILIENT BACKEND REQUEST LAYER WITH MULTI-URL FALLBACKS
    ========================================================= */
 
-const detectLanguage = (text = "") => {
-  const arabic = (text.match(/[\u0600-\u06FF]/g) || []).length;
-  const english = (text.match(/[A-Za-z]/g) || []).length;
+const requestChat = async (payload) => {
+  let lastError = null;
 
-  return arabic > 0 && arabic >= english ? "ar" : "en";
+  // Build full queue of backup base URLs and endpoint permutations
+  const candidateBaseUrls = Array.from(
+    new Set([API_BASE_URL, ...FALLBACK_BACKEND_URLS])
+  ).filter(Boolean);
+
+  for (const currentBase of candidateBaseUrls) {
+    const endpoints = generateEndpointVariations(currentBase);
+
+    for (const endpoint of endpoints) {
+      for (
+        let attempt = 0;
+        attempt <= API_RETRIES;
+        attempt += 1
+      ) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, API_TIMEOUT_MS);
+
+        try {
+          console.log(
+            `[MedCreative] Request attempt ${attempt + 1} targeting: ${endpoint}`
+          );
+
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+            cache: "no-store",
+          });
+
+          clearTimeout(timeoutId);
+
+          if (response.ok) {
+            let data;
+            try {
+              data = await response.json();
+            } catch {
+              throw new Error(
+                "Backend returned a non-JSON response format."
+              );
+            }
+
+            if (!data || typeof data !== "object") {
+              throw new Error(
+                "Backend returned an invalid data payload structure."
+              );
+            }
+
+            return data;
+          }
+
+          let backendMessage = "";
+          try {
+            const errorData = await response.json();
+            backendMessage =
+              errorData?.detail ||
+              errorData?.message ||
+              errorData?.error ||
+              "";
+          } catch {
+            // Fallback if error body is plain text or empty
+          }
+
+          lastError = new Error(
+            typeof backendMessage === "string" && backendMessage.trim()
+              ? backendMessage
+              : `Backend responded with HTTP error status: ${response.status}`
+          );
+
+          if (isRetryableStatus(response.status)) {
+            // Try next endpoint/retry layer immediately
+            break;
+          }
+
+          throw lastError;
+        } catch (error) {
+          clearTimeout(timeoutId);
+          lastError = error;
+
+          const message = String(
+            error?.message || ""
+          ).toLowerCase();
+          const isAbort = error?.name === "AbortError";
+          const isNetworkError =
+            message.includes("failed to fetch") ||
+            message.includes("networkerror") ||
+            message.includes("network error") ||
+            message.includes("fetch");
+
+          if (isAbort || isNetworkError) {
+            if (attempt < API_RETRIES) {
+              await sleep(1000 * (attempt + 1));
+              continue;
+            }
+            break;
+          }
+
+          // Non-network errors break current endpoint loop to check backup URLs
+          break;
+        }
+      }
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(
+      "Unable to reach the MedCreative backend services across all fallback routes."
+    )
+  );
 };
 
 /* =========================================================
-   TEXT CLEANING
+   HELPERS & FORMATTERS
    ========================================================= */
+
+const detectLanguage = (text = "") => {
+  const arabic = text.match(/[\u0600-\u06FF]/g) || [];
+  const english = text.match(/[A-Za-z]/g) || [];
+  return arabic.length > 0 && arabic.length >= english.length
+    ? "ar"
+    : "en";
+};
 
 const cleanMarkdown = (text = "") =>
   String(text)
@@ -47,13 +223,8 @@ const cleanMarkdown = (text = "") =>
     .replace(/^[-*]\s?/gm, "")
     .trim();
 
-/* =========================================================
-   FORMAT ANSWER
-   ========================================================= */
-
 const formatAnswer = (text = "") => {
   if (!text) return null;
-
   const cleanedText = String(text).trim();
 
   if (
@@ -66,19 +237,14 @@ const formatAnswer = (text = "") => {
 
   const rawLines = cleanedText.split(/\n+/).flatMap((line) => {
     const trimmed = line.trim();
-
     if (!trimmed) return [];
-
     if (trimmed.length > 120) {
       return trimmed.split(/(?<=[.?!])\s+/);
     }
-
     return [trimmed];
   });
 
-  const parsedItems = rawLines
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const parsedItems = rawLines.map((line) => line.trim()).filter(Boolean);
 
   return (
     <div
@@ -93,7 +259,6 @@ const formatAnswer = (text = "") => {
         const cleanedItem = item
           .replace(/^[-*•]\s*/, "")
           .replace(/^\d+\.\s*/, "");
-
         const parts = cleanedItem.split(/(\*\*.*?\*\*)/g);
 
         return (
@@ -120,7 +285,6 @@ const formatAnswer = (text = "") => {
             >
               •
             </span>
-
             <div style={{ flex: 1 }}>
               {parts.map((part, partIndex) =>
                 part.startsWith("**") && part.endsWith("**") ? (
@@ -143,15 +307,14 @@ const formatAnswer = (text = "") => {
 };
 
 /* =========================================================
-   APP
+   MAIN APP COMPONENT
    ========================================================= */
 
 export default function App() {
   const [messages, setMessages] = useState([
     {
       sender: "bot",
-      text:
-        "Hello! I'm MedCreative, your clinical assistant ready to help with CKD and KDIGO guidelines. How may I help you today? 😊",
+      text: "Hello! I'm MedCreative, your clinical assistant ready to help with CKD and KDIGO guidelines. How may I help you today? 😊",
       originalText:
         "Hello! I'm MedCreative, your clinical assistant ready to help with CKD and KDIGO guidelines. How may I help you today? 😊",
       userPromptText: "",
@@ -173,61 +336,57 @@ export default function App() {
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-
   const [retrievalK, setRetrievalK] = useState(5);
   const [scoreThreshold, setScoreThreshold] = useState(1.2);
-
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  
+  // Retractable Right-Side Panel State (Risk & Safety Panel)
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
 
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
   const [presetTab, setPresetTab] = useState("questions");
-
   const [isListening, setIsListening] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState(null);
-
   const [isSymptomsModalOpen, setIsSymptomsModalOpen] = useState(false);
   const [symptomsTab, setSymptomsTab] = useState("overview");
-
   const [selectedSymptoms, setSelectedSymptoms] = useState([]);
-
   const [evalAge, setEvalAge] = useState(45);
   const [evalCreatinine, setEvalCreatinine] = useState(1.1);
   const [evalUrea, setEvalUrea] = useState(30);
-
   const [evaluationResult, setEvaluationResult] = useState(null);
 
   const latestMessageRef = useRef(null);
   const recognitionRef = useRef(null);
   const inputValRef = useRef("");
-
-  /* =========================================================
-     DEBUG
-     ========================================================= */
-
-  useEffect(() => {
-    console.log(
-      "MedCreative API base:",
-      API_URL || "relative Vercel routes"
-    );
-
-    console.log(
-      "MedCreative API endpoints:",
-      API_ENDPOINTS
-    );
-  }, []);
-
-  /* =========================================================
-     INPUT REF
-     ========================================================= */
+  const loadingRef = useRef(false);
+  const retrievalKRef = useRef(retrievalK);
+  const scoreThresholdRef = useRef(scoreThreshold);
+  const voiceSubmissionRef = useRef(false);
+  const handleSubmitRef = useRef(null);
 
   useEffect(() => {
     inputValRef.current = input;
   }, [input]);
 
-  /* =========================================================
-     AUTO SCROLL
-     ========================================================= */
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    retrievalKRef.current = retrievalK;
+  }, [retrievalK]);
+
+  useEffect(() => {
+    scoreThresholdRef.current = scoreThreshold;
+  }, [scoreThreshold]);
+
+  useEffect(() => {
+    console.log("----------------------------------------");
+    console.log("[MedCreative Frontend Origin]:", window.location.origin);
+    console.log("[MedCreative Active Backend URL]:", API_BASE_URL);
+    console.log("----------------------------------------");
+  }, []);
 
   useEffect(() => {
     latestMessageRef.current?.scrollIntoView({
@@ -236,173 +395,131 @@ export default function App() {
     });
   }, [messages.length, loading]);
 
-  /* =========================================================
-     SPEECH RECOGNITION
-     ========================================================= */
-
+  /* Speech Recognition Setup */
   useEffect(() => {
+    if (!isBrowser) return;
     const SpeechRecognition =
-      window.SpeechRecognition ||
-      window.webkitSpeechRecognition;
-
+      window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
     const recognition = new SpeechRecognition();
-
     recognition.continuous = false;
     recognition.interimResults = true;
-
-    /*
-      Arabic is used here because your application supports
-      Egyptian Arabic. The final question is still detected
-      automatically by detectLanguage().
-    */
     recognition.lang = "ar-EG";
 
     recognition.onstart = () => {
       setIsListening(true);
+      voiceSubmissionRef.current = false;
     };
 
     recognition.onresult = (event) => {
       let transcript = "";
-
-      for (
-        let i = event.resultIndex;
-        i < event.results.length;
-        i++
-      ) {
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
         transcript += event.results[i][0].transcript;
       }
-
-      if (transcript.trim()) {
-        setInput(transcript.trim());
+      const finalText = transcript.trim();
+      if (finalText) {
+        inputValRef.current = finalText;
+        setInput(finalText);
       }
     };
 
     recognition.onerror = (event) => {
       console.error("Speech recognition error:", event.error);
       setIsListening(false);
+      voiceSubmissionRef.current = false;
     };
 
     recognition.onend = () => {
       setIsListening(false);
-
       const spokenText = inputValRef.current.trim();
-
-      if (spokenText) {
+      if (
+        spokenText &&
+        !loadingRef.current &&
+        !voiceSubmissionRef.current
+      ) {
+        voiceSubmissionRef.current = true;
         setTimeout(() => {
-          handleSubmit(null, spokenText);
+          handleSubmitRef.current?.(null, spokenText);
+          setTimeout(() => {
+            voiceSubmissionRef.current = false;
+          }, 500);
         }, 300);
       }
     };
 
     recognitionRef.current = recognition;
-
     return () => {
       try {
         recognition.stop();
       } catch {
-        // Ignore cleanup errors.
+        /* cleanup */
       }
+      recognitionRef.current = null;
     };
   }, []);
 
-  /* =========================================================
-     VOICE INPUT
-     ========================================================= */
-
   const toggleVoiceInput = async () => {
     const SpeechRecognition =
-      window.SpeechRecognition ||
-      window.webkitSpeechRecognition;
-
+      window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert(
-        "Speech recognition is not supported in this browser."
-      );
+      alert("Speech recognition is not supported in this browser.");
       return;
     }
-
     if (isListening) {
       try {
         recognitionRef.current?.stop();
       } catch {
-        // Ignore.
+        /* ignore */
       }
-
       setIsListening(false);
       return;
     }
+    if (loading) return;
 
     try {
       if (navigator.mediaDevices?.getUserMedia) {
-        const stream =
-          await navigator.mediaDevices.getUserMedia({
-            audio: true,
-          });
-
-        stream
-          .getTracks()
-          .forEach((track) => track.stop());
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+        stream.getTracks().forEach((track) => track.stop());
       }
-
+      inputValRef.current = input;
       recognitionRef.current?.start();
     } catch (error) {
-      console.error("Microphone error:", error);
-
+      console.error("Microphone access error:", error);
       setIsListening(false);
-
       alert(
-        "Could not access the microphone. Please allow microphone access in your browser."
+        "Could not access the microphone. Please check permission settings."
       );
     }
   };
 
-  /* =========================================================
-     COPY RESPONSE
-     ========================================================= */
-
   const copyResponseText = async (text, index) => {
     try {
-      await navigator.clipboard.writeText(
-        cleanMarkdown(text)
-      );
-
+      await navigator.clipboard.writeText(cleanMarkdown(text));
       setMessages((previous) =>
         previous.map((message, messageIndex) =>
-          messageIndex === index
-            ? { ...message, copied: true }
-            : message
+          messageIndex === index ? { ...message, copied: true } : message
         )
       );
-
       setTimeout(() => {
         setMessages((previous) =>
           previous.map((message, messageIndex) =>
-            messageIndex === index
-              ? { ...message, copied: false }
-              : message
+            messageIndex === index ? { ...message, copied: false } : message
           )
         );
       }, 2000);
     } catch (error) {
       console.error("Copy failed:", error);
-      alert("Could not copy the response.");
     }
   };
 
-  /* =========================================================
-     TEXT TO SPEECH
-     ========================================================= */
-
   const speakAnswer = (text, index) => {
     if (!("speechSynthesis" in window)) {
-      alert(
-        "Text-to-speech is not supported in this browser."
-      );
+      alert("Text-to-speech is not supported in this browser.");
       return;
     }
-
     if (window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
       setSpeakingIndex(null);
@@ -410,137 +527,78 @@ export default function App() {
     }
 
     const message = messages[index];
-
-    const utterance =
-      new SpeechSynthesisUtterance(
-        cleanMarkdown(text)
-      );
-
-    utterance.lang =
-      message?.currentLanguage === "ar"
-        ? "ar-EG"
-        : "en-US";
-
+    const utterance = new SpeechSynthesisUtterance(cleanMarkdown(text));
+    utterance.lang = message?.currentLanguage === "ar" ? "ar-EG" : "en-US";
     utterance.rate = 1;
-
-    utterance.onstart = () => {
-      setSpeakingIndex(index);
-    };
-
-    utterance.onend = () => {
-      setSpeakingIndex(null);
-    };
-
-    utterance.onerror = () => {
-      setSpeakingIndex(null);
-    };
-
+    utterance.onstart = () => setSpeakingIndex(index);
+    utterance.onend = () => setSpeakingIndex(null);
+    utterance.onerror = () => setSpeakingIndex(null);
     window.speechSynthesis.speak(utterance);
   };
 
-  /* =========================================================
-     TRANSLATION
-     ========================================================= */
-
   const translateMessage = async (index) => {
     const message = messages[index];
-
     if (!message) return;
 
-    /*
-      If translation already exists, simply switch between
-      the original and cached translation.
-    */
     if (message.cachedTranslation) {
+      const originalLanguage = detectLanguage(message.originalText || "");
+      const isCurrentlyOriginal = message.currentLanguage === originalLanguage;
       setMessages((previous) =>
         previous.map((item, itemIndex) => {
           if (itemIndex !== index) return item;
-
-          const switchingToEnglish =
-            item.currentLanguage === "ar";
-
           return {
             ...item,
-            text: switchingToEnglish
-              ? item.originalText
-              : item.cachedTranslation,
-            currentLanguage: switchingToEnglish
-              ? "en"
-              : "ar",
+            text: isCurrentlyOriginal
+              ? item.cachedTranslation
+              : item.originalText,
+            currentLanguage: isCurrentlyOriginal
+              ? originalLanguage === "ar"
+                ? "en"
+                : "ar"
+              : originalLanguage,
           };
         })
       );
-
       return;
     }
 
     setMessages((previous) =>
       previous.map((item, itemIndex) =>
-        itemIndex === index
-          ? { ...item, translating: true }
-          : item
+        itemIndex === index ? { ...item, translating: true } : item
       )
     );
 
     try {
-      const sourceLanguage =
-        message.currentLanguage || "en";
-
-      const targetLanguage =
-        sourceLanguage === "ar" ? "en" : "ar";
-
-      const textToTranslate =
-        message.originalText || message.text;
-
+      const sourceLanguage = message.currentLanguage || detectLanguage(message.text);
+      const targetLanguage = sourceLanguage === "ar" ? "en" : "ar";
+      const textToTranslate = message.originalText || message.text;
       const maxChunkLength = 450;
-
       const translatedChunks = [];
 
-      for (
-        let i = 0;
-        i < textToTranslate.length;
-        i += maxChunkLength
-      ) {
-        const chunk = textToTranslate.substring(
-          i,
-          i + maxChunkLength
-        );
-
+      for (let i = 0; i < textToTranslate.length; i += maxChunkLength) {
+        const chunk = textToTranslate.substring(i, i + maxChunkLength);
         const response = await fetch(
           `https://api.mymemory.translated.net/get?q=${encodeURIComponent(
             chunk
           )}&langpair=${sourceLanguage}|${targetLanguage}`
         );
-
-        if (!response.ok) {
-          throw new Error(
-            "Translation service failed."
-          );
-        }
-
+        if (!response.ok) throw new Error("Translation service failed.");
         const data = await response.json();
-
         translatedChunks.push(
-          data.responseData?.translatedText ||
-            chunk
+          data?.responseData?.translatedText || chunk
         );
       }
 
-      const translated =
-        translatedChunks.join(" ");
-
+      const translated = translatedChunks.join(" ");
       setMessages((previous) =>
         previous.map((item, itemIndex) =>
           itemIndex === index
             ? {
                 ...item,
-                originalText:
-                  message.originalText ||
-                  message.text,
+                originalText: message.originalText || message.text,
                 cachedTranslation: translated,
                 text: translated,
-                currentLanguage:
-                  targetLanguage,
+                currentLanguage: targetLanguage,
                 translating: false,
               }
             : item
@@ -548,145 +606,27 @@ export default function App() {
       );
     } catch (error) {
       console.error("Translation error:", error);
-
       setMessages((previous) =>
         previous.map((item, itemIndex) =>
-          itemIndex === index
-            ? {
-                ...item,
-                translating: false,
-              }
-            : item
+          itemIndex === index ? { ...item, translating: false } : item
         )
       );
-
-      alert(
-        "Translation failed or exceeded the translation service limits."
-      );
+      alert("Translation failed or service limits exceeded.");
     }
   };
 
-  /* =========================================================
-     API REQUEST
-     ========================================================= */
-
-  const requestChat = async (payload) => {
-    let lastError = null;
-
-    for (const endpoint of API_ENDPOINTS) {
-      try {
-        console.log(
-          "Trying MedCreative API endpoint:",
-          endpoint
-        );
-
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        /*
-          If this endpoint is a Vercel 404, try the next
-          configured endpoint.
-
-          Example:
-            /api/chat -> 404
-            then:
-            /chat -> backend/main.py
-        */
-        if (response.status === 404) {
-          lastError = new Error(
-            `API route not found: ${endpoint}`
-          );
-
-          continue;
-        }
-
-        if (!response.ok) {
-          let errorMessage =
-            `Backend returned HTTP ${response.status}.`;
-
-          try {
-            const errorData =
-              await response.json();
-
-            if (errorData?.detail) {
-              errorMessage = errorData.detail;
-            }
-
-            if (errorData?.message) {
-              errorMessage = errorData.message;
-            }
-          } catch {
-            // Response was not JSON.
-          }
-
-          throw new Error(errorMessage);
-        }
-
-        const data = await response.json();
-
-        return data;
-      } catch (error) {
-        lastError = error;
-
-        /*
-          Only continue to another endpoint for a route
-          failure. Other backend errors should be shown
-          instead of hiding them.
-        */
-        if (
-          !String(error?.message || "")
-            .toLowerCase()
-            .includes("route not found")
-        ) {
-          throw error;
-        }
-      }
-    }
-
-    throw (
-      lastError ||
-      new Error(
-        "No working backend API route was found."
-      )
-    );
-  };
-
-  /* =========================================================
-     CHAT SUBMISSION
-     ========================================================= */
-
-  const handleSubmit = async (
-    event,
-    customPrompt = null
-  ) => {
-    if (event) {
-      event.preventDefault();
-    }
-
-    const rawInput = (
-      customPrompt !== null
-        ? customPrompt
-        : input
-    ).trim();
-
-    if (!rawInput || loading) return;
+  const handleSubmit = async (event, customPrompt = null) => {
+    if (event) event.preventDefault();
+    const rawInput = (customPrompt !== null ? customPrompt : input).trim();
+    if (!rawInput || loadingRef.current) return;
 
     const language = detectLanguage(rawInput);
-
     if (customPrompt === null) {
       setInput("");
+      inputValRef.current = "";
     }
-
     setIsPresetMenuOpen(false);
 
-    /*
-      Add user message immediately.
-    */
     setMessages((previous) => [
       ...previous,
       {
@@ -697,45 +637,34 @@ export default function App() {
     ]);
 
     setLoading(true);
+    loadingRef.current = true;
 
     try {
       const data = await requestChat({
         question: rawInput,
-        top_k: retrievalK,
-        distance_threshold: scoreThreshold,
+        top_k: retrievalKRef.current,
+        distance_threshold: scoreThresholdRef.current,
       });
 
       const finalAnswer =
         data?.answer ||
+        data?.response ||
+        data?.message ||
         "No answer was returned by the backend.";
 
-      let evalMetrics =
-        data?.evaluation_metrics || null;
-
-      /*
-        Frontend safety display.
-        The backend remains the source of truth.
-      */
+      let evalMetrics = data?.evaluation_metrics || data?.metrics || null;
       if (evalMetrics) {
-        const contextRelevance = Number(
-          evalMetrics.context_relevance_score ?? 1
-        );
-
-        const faithfulness = Number(
-          evalMetrics.faithfulness_score ?? 1
-        );
-
-        if (
-          contextRelevance < 0.3 ||
-          faithfulness < 0.8
-        ) {
+        const contextRelevance = Number(evalMetrics.context_relevance_score ?? 1);
+        const faithfulness = Number(evalMetrics.faithfulness_score ?? 1);
+        if (contextRelevance < 0.3 || faithfulness < 0.8) {
           evalMetrics = {
             ...evalMetrics,
-            hallucination_risk:
-              "High (Low Context/Faithfulness)",
+            hallucination_risk: "High (Low Context/Faithfulness)",
           };
         }
       }
+
+      const sources = Array.isArray(data?.sources) ? data.sources : [];
 
       setMessages((previous) => [
         ...previous,
@@ -744,40 +673,32 @@ export default function App() {
           text: finalAnswer,
           originalText: finalAnswer,
           userPromptText: rawInput,
-          sources: Array.isArray(data?.sources)
-            ? data.sources
-            : [],
-          isConversational:
-            Boolean(data?.is_conversational),
+          sources,
+          isConversational: Boolean(data?.is_conversational),
           evaluationMetrics: evalMetrics,
-          warningMessage:
-            data?.warning_message || null,
-          currentLanguage:
-            data?.language || language,
+          warningMessage: data?.warning_message || data?.warning || null,
+          currentLanguage: data?.language || language,
           cachedTranslation: null,
           translating: false,
           copied: false,
         },
       ]);
     } catch (error) {
-      console.error(
-        "MedCreative backend request failed:",
-        error
-      );
-
-      const errorText =
-        error?.message ||
-        "Unable to connect to the backend.";
+      console.error("[MedCreative] Backend request failed completely:", error);
+      
+      const errorMessage =
+        typeof error === "string"
+          ? error
+          : error?.message || String(error || "Unknown error occurred");
 
       setMessages((previous) => [
         ...previous,
         {
           sender: "bot",
           text:
-            `⚠️ Connection Error: ${errorText}\n\n` +
-            "If this is the deployed Vercel app, make sure your Vercel backend route is configured for /api/chat or /chat.",
-          originalText:
-            `⚠️ Connection Error: ${errorText}`,
+            `⚠️ Connection Error: ${errorMessage}\n\n` +
+            `The frontend is running on Vercel and attempting to reach Railway. Target Backend URL: ${PRIMARY_RAILWAY_BACKEND}`,
+          originalText: `⚠️ Connection Error: ${errorMessage}`,
           userPromptText: "",
           sources: [],
           isConversational: false,
@@ -791,19 +712,18 @@ export default function App() {
       ]);
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   };
 
-  /* =========================================================
-     SYMPTOM / RISK SCREENING
-     ========================================================= */
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  });
 
   const handleSymptomToggle = (symptom) => {
     setSelectedSymptoms((previous) =>
       previous.includes(symptom)
-        ? previous.filter(
-            (item) => item !== symptom
-          )
+        ? previous.filter((item) => item !== symptom)
         : [...previous, symptom]
     );
   };
@@ -812,56 +732,28 @@ export default function App() {
     const creatinine = Number(evalCreatinine);
     const urea = Number(evalUrea);
     const age = Number(evalAge);
-
-    const symptomCount =
-      selectedSymptoms.length;
+    const symptomCount = selectedSymptoms.length;
 
     let riskLevel = "Low Risk";
-    let stage =
-      "No clear high-risk pattern detected.";
+    let stage = "No clear high-risk pattern detected.";
     let color = "#10b981";
 
-    if (
-      creatinine > 2.5 ||
-      urea > 60 ||
-      symptomCount >= 4
-    ) {
+    if (creatinine > 2.5 || urea > 60 || symptomCount >= 4) {
       riskLevel = "High Risk";
-      stage =
-        "Needs clinical evaluation / possible advanced CKD.";
+      stage = "Needs clinical evaluation / possible advanced CKD.";
       color = "#ef4444";
-    } else if (
-      creatinine > 1.5 ||
-      urea > 45 ||
-      symptomCount >= 2
-    ) {
+    } else if (creatinine > 1.5 || urea > 45 || symptomCount >= 2) {
       riskLevel = "Moderate Risk";
-      stage =
-        "Further kidney-function assessment is recommended.";
+      stage = "Further kidney-function assessment is recommended.";
       color = "#f59e0b";
-    } else if (
-      creatinine > 1.2 ||
-      urea > 35 ||
-      symptomCount >= 1 ||
-      age > 60
-    ) {
+    } else if (creatinine > 1.2 || urea > 35 || symptomCount >= 1 || age > 60) {
       riskLevel = "Mild Risk";
-      stage =
-        "Consider further kidney-function assessment.";
+      stage = "Consider further kidney-function assessment.";
       color = "#3b82f6";
     }
 
-    setEvaluationResult({
-      riskLevel,
-      stage,
-      color,
-      symptomCount,
-    });
+    setEvaluationResult({ riskLevel, stage, color, symptomCount });
   };
-
-  /* =========================================================
-     SYMPTOMS
-     ========================================================= */
 
   const symptoms = [
     "Fatigue / Low Energy",
@@ -876,92 +768,28 @@ export default function App() {
     "Puffy Eyes in the Morning",
   ];
 
-  /* =========================================================
-     QUICK CLINICAL PRESETS
-     ========================================================= */
-
   const clinicalPresets = [
-    {
-      q: "What is the normal GFR?",
-      label: "What is the normal GFR?",
-      emoji: "💧",
-    },
-    {
-      q: "What are the KDIGO staging criteria for CKD based on GFR and Albuminuria?",
-      label: "CKD Staging Criteria",
-      emoji: "📊",
-    },
-    {
-      q: "ايه هو الفشل الكلوي؟",
-      label: "ما هو الفشل الكلوي؟",
-      emoji: "🩺",
-    },
-    {
-      q: "What are the guidelines for blood pressure management in CKD patients?",
-      label: "Blood Pressure Targets",
-      emoji: "❤️",
-    },
-    {
-      q: "What is albuminuria?",
-      label: "What is albuminuria?",
-      emoji: "🧪",
-    },
-    {
-      q: "How does water intake affect kidneys?",
-      label: "Water & Kidney Health",
-      emoji: "🌊",
-    },
-    {
-      q: "What is a normal creatinine level?",
-      label: "Normal Creatinine",
-      emoji: "📈",
-    },
-    {
-      q: "When should a CKD patient be referred to a nephrologist?",
-      label: "Nephrology Referral",
-      emoji: "🏥",
-    },
-    {
-      q: "How do SGLT2 inhibitors protect the kidneys in diabetic kidney disease?",
-      label: "SGLT2 Kidney Protection",
-      emoji: "🛡️",
-    },
+    { q: "What is the normal GFR?", label: "What is the normal GFR?", emoji: "💧" },
+    { q: "What are the KDIGO staging criteria for CKD based on GFR and Albuminuria?", label: "CKD Staging Criteria", emoji: "📊" },
+    { q: "ايه هو الفشل الكلوي؟", label: "ما هو الفشل الكلوي؟", emoji: "🩺" },
+    { q: "What are the guidelines for blood pressure management in CKD patients?", label: "Blood Pressure Targets", emoji: "❤️" },
+    { q: "What is albuminuria?", label: "What is albuminuria?", emoji: "🧪" },
+    { q: "How does water intake affect kidneys?", label: "Water & Kidney Health", emoji: "🌊" },
+    { q: "What is a normal creatinine level?", label: "Normal Creatinine", emoji: "📈" },
+    { q: "When should a CKD patient be referred to a nephrologist?", label: "Nephrology Referral", emoji: "🏥" },
+    { q: "How do SGLT2 inhibitors protect the kidneys in diabetic kidney disease?", label: "SGLT2 Kidney Protection", emoji: "🛡️" },
   ];
 
   const causePresets = [
-    {
-      q: "What are the primary causes of chronic kidney disease (CKD)?",
-      label: "Primary Causes of CKD",
-      emoji: "🧬",
-    },
-    {
-      q: "What causes acute kidney injury (AKI)?",
-      label: "Acute Kidney Injury Causes",
-      emoji: "⚡",
-    },
-    {
-      q: "What causes diabetic nephropathy?",
-      label: "Diabetic Nephropathy Etiology",
-      emoji: "🩸",
-    },
-    {
-      q: "What causes hypertensive nephrosclerosis?",
-      label: "Hypertensive Nephrosclerosis",
-      emoji: "❤️",
-    },
+    { q: "What are the primary causes of chronic kidney disease (CKD)?", label: "Primary Causes of CKD", emoji: "🧬" },
+    { q: "What causes acute kidney injury (AKI)?", label: "Acute Kidney Injury Causes", emoji: "⚡" },
+    { q: "What causes diabetic nephropathy?", label: "Diabetic Nephropathy Etiology", emoji: "🩸" },
+    { q: "What causes hypertensive nephrosclerosis?", label: "Hypertensive Nephrosclerosis", emoji: "❤️" },
   ];
-
-  /* =========================================================
-     RENDER
-     ========================================================= */
 
   return (
     <div
-      className={`page-wrapper ${
-        isDarkMode
-          ? "dark-theme"
-          : "light-theme"
-      }`}
+      className={`page-wrapper ${isDarkMode ? "dark-theme" : "light-theme"}`}
       style={{
         display: "flex",
         flexDirection: "row",
@@ -975,85 +803,72 @@ export default function App() {
         left: 0,
       }}
     >
-      {/* =====================================================
-          SIDEBAR TOGGLE
-      ===================================================== */}
-
+      {/* Left Sidebar Toggle Button */}
       <button
-        onClick={() =>
-          setIsSidebarOpen(
-            (previous) => !previous
-          )
-        }
-        title={
-          isSidebarOpen
-            ? "Collapse Sidebar"
-            : "Open Sidebar"
-        }
+        onClick={() => setIsSidebarOpen((previous) => !previous)}
+        title={isSidebarOpen ? "Collapse Sidebar" : "Open Sidebar"}
         style={{
           position: "fixed",
           top: "20px",
-          left: isSidebarOpen
-            ? "340px"
-            : "20px",
+          left: isSidebarOpen ? "340px" : "20px",
           zIndex: 1000000,
-          background:
-            "linear-gradient(135deg, #0284c7, #0369a1)",
+          background: "linear-gradient(135deg, #0284c7, #0369a1)",
           border: "none",
           color: "#fff",
           padding: "10px 14px",
           borderRadius: "10px",
           cursor: "pointer",
           fontWeight: "700",
-          boxShadow:
-            "0 4px 15px rgba(0,0,0,0.2)",
+          boxShadow: "0 4px 15px rgba(0,0,0,0.2)",
           transition: "left 0.3s ease",
         }}
       >
-        {isSidebarOpen
-          ? "◀ Hide Sidebar"
-          : "▶ Open Sidebar"}
+        {isSidebarOpen ? "◀ Hide Sidebar" : "▶ Open Sidebar"}
       </button>
 
-      {/* =====================================================
-          QUICK PRESETS
-      ===================================================== */}
-
-      <div
+      {/* Right Side Panel Toggle Button (Risk & Safety Tab Drawer) */}
+      <button
+        onClick={() => setIsRightPanelOpen((previous) => !previous)}
+        title={isRightPanelOpen ? "Collapse Risk & Safety Panel" : "Open Risk & Safety Panel"}
         style={{
           position: "fixed",
           top: "20px",
-          right: "30px",
-          zIndex: 999999,
+          right: isRightPanelOpen ? "340px" : "20px",
+          zIndex: 1000000,
+          background: "linear-gradient(135deg, #059669, #047857)",
+          border: "none",
+          color: "#fff",
+          padding: "10px 14px",
+          borderRadius: "10px",
+          cursor: "pointer",
+          fontWeight: "700",
+          boxShadow: "0 4px 15px rgba(0,0,0,0.2)",
+          transition: "right 0.3s ease",
         }}
       >
+        {isRightPanelOpen ? "🛡️ Hide Safety ▶" : "🛡️ Risk & Safety ◀"}
+      </button>
+
+      {/* Quick Presets Menu Button */}
+      <div style={{ position: "fixed", top: "20px", right: isRightPanelOpen ? "360px" : "90px", zIndex: 999999, transition: "right 0.3s ease" }}>
         <button
-          onClick={() =>
-            setIsPresetMenuOpen(
-              (previous) => !previous
-            )
-          }
+          onClick={() => setIsPresetMenuOpen((previous) => !previous)}
           title="Quick Clinical Presets & Guidelines"
           style={{
             display: "flex",
             alignItems: "center",
             gap: "8px",
             padding: "10px 18px",
-            background:
-              "linear-gradient(135deg, #e4e0d8, #c8beaf)",
+            background: "linear-gradient(135deg, #e4e0d8, #c8beaf)",
             border: "1px solid #b3a896",
             borderRadius: "30px",
             cursor: "pointer",
             color: "#2c2825",
             fontWeight: "700",
-            boxShadow:
-              "0 8px 25px rgba(0,0,0,0.15)",
+            boxShadow: "0 8px 25px rgba(0,0,0,0.15)",
           }}
         >
-          <span style={{ fontSize: "1.2rem" }}>
-            💊
-          </span>
-
+          <span style={{ fontSize: "1.2rem" }}>💊</span>
           <span>Quick Presets</span>
         </button>
 
@@ -1066,32 +881,19 @@ export default function App() {
               display: "flex",
               flexDirection: "column",
               gap: "8px",
-              background: isDarkMode
-                ? "#1e293b"
-                : "#ffffff",
-              border: isDarkMode
-                ? "1px solid #475569"
-                : "1px solid #cbd5e1",
+              background: isDarkMode ? "#1e293b" : "#ffffff",
+              border: isDarkMode ? "1px solid #475569" : "1px solid #cbd5e1",
               borderRadius: "12px",
               padding: "14px",
               width: "360px",
               maxWidth: "calc(100vw - 40px)",
-              boxShadow:
-                "0 15px 35px rgba(0,0,0,0.3)",
+              boxShadow: "0 15px 35px rgba(0,0,0,0.3)",
               zIndex: 9999999,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                gap: "6px",
-                marginBottom: "6px",
-              }}
-            >
+            <div style={{ display: "flex", gap: "6px", marginBottom: "6px" }}>
               <button
-                onClick={() =>
-                  setPresetTab("questions")
-                }
+                onClick={() => setPresetTab("questions")}
                 style={{
                   flex: 1,
                   padding: "8px",
@@ -1103,10 +905,7 @@ export default function App() {
                       : isDarkMode
                       ? "#0f172a"
                       : "#f1f5f9",
-                  color:
-                    presetTab === "questions"
-                      ? "#fff"
-                      : "inherit",
+                  color: presetTab === "questions" ? "#fff" : "inherit",
                   fontWeight: "700",
                   cursor: "pointer",
                   fontSize: "0.85rem",
@@ -1114,11 +913,8 @@ export default function App() {
               >
                 💊 Clinical Questions
               </button>
-
               <button
-                onClick={() =>
-                  setPresetTab("causes")
-                }
+                onClick={() => setPresetTab("causes")}
                 style={{
                   flex: 1,
                   padding: "8px",
@@ -1130,10 +926,7 @@ export default function App() {
                       : isDarkMode
                       ? "#0f172a"
                       : "#f1f5f9",
-                  color:
-                    presetTab === "causes"
-                      ? "#fff"
-                      : "inherit",
+                  color: presetTab === "causes" ? "#fff" : "inherit",
                   fontWeight: "700",
                   cursor: "pointer",
                   fontSize: "0.85rem",
@@ -1153,48 +946,30 @@ export default function App() {
                   overflowY: "auto",
                 }}
               >
-                {clinicalPresets.map(
-                  (preset, index) => (
-                    <button
-                      key={index}
-                      onClick={() =>
-                        handleSubmit(
-                          null,
-                          preset.q
-                        )
-                      }
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "12px",
-                        textAlign: "left",
-                        width: "100%",
-                        padding: "10px 12px",
-                        background: isDarkMode
-                          ? "#253244"
-                          : "#eef3f8",
-                        border: isDarkMode
-                          ? "1px solid #37475e"
-                          : "1px solid #d8e2ed",
-                        borderRadius: "10px",
-                        cursor: "pointer",
-                        color: isDarkMode
-                          ? "#f8fafc"
-                          : "#1e293b",
-                        fontWeight: "500",
-                        fontSize: "0.9rem",
-                      }}
-                    >
-                      <span>
-                        {preset.emoji}
-                      </span>
-
-                      <span>
-                        {preset.label}
-                      </span>
-                    </button>
-                  )
-                )}
+                {clinicalPresets.map((preset, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleSubmit(null, preset.q)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "12px",
+                      textAlign: "left",
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: isDarkMode ? "#253244" : "#eef3f8",
+                      border: isDarkMode ? "1px solid #37475e" : "1px solid #d8e2ed",
+                      borderRadius: "10px",
+                      cursor: "pointer",
+                      color: isDarkMode ? "#f8fafc" : "#1e293b",
+                      fontWeight: "500",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    <span>{preset.emoji}</span>
+                    <span>{preset.label}</span>
+                  </button>
+                ))}
               </div>
             )}
 
@@ -1208,70 +983,40 @@ export default function App() {
                   overflowY: "auto",
                 }}
               >
-                <p
-                  style={{
-                    fontSize: "0.8rem",
-                    margin:
-                      "0 0 4px 0",
-                    opacity: 0.8,
-                  }}
-                >
-                  Explore primary disease
-                  causes and etiologies:
+                <p style={{ fontSize: "0.8rem", margin: "0 0 4px 0", opacity: 0.8 }}>
+                  Explore primary disease causes and etiologies:
                 </p>
-
-                {causePresets.map(
-                  (preset, index) => (
-                    <button
-                      key={index}
-                      onClick={() =>
-                        handleSubmit(
-                          null,
-                          preset.q
-                        )
-                      }
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "12px",
-                        textAlign: "left",
-                        width: "100%",
-                        padding: "10px 12px",
-                        background: isDarkMode
-                          ? "#16332c"
-                          : "#e6f4ed",
-                        border: isDarkMode
-                          ? "1px solid #224d42"
-                          : "1px solid #cce8d9",
-                        borderRadius: "10px",
-                        cursor: "pointer",
-                        color: isDarkMode
-                          ? "#f8fafc"
-                          : "#1e293b",
-                        fontWeight: "500",
-                        fontSize: "0.9rem",
-                      }}
-                    >
-                      <span>
-                        {preset.emoji}
-                      </span>
-
-                      <span>
-                        {preset.label}
-                      </span>
-                    </button>
-                  )
-                )}
+                {causePresets.map((preset, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleSubmit(null, preset.q)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "12px",
+                      textAlign: "left",
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: isDarkMode ? "#16332c" : "#e6f4ed",
+                      border: isDarkMode ? "1px solid #224d42" : "1px solid #cce8d9",
+                      borderRadius: "10px",
+                      cursor: "pointer",
+                      color: isDarkMode ? "#f8fafc" : "#1e293b",
+                      fontWeight: "500",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    <span>{preset.emoji}</span>
+                    <span>{preset.label}</span>
+                  </button>
+                ))}
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* =====================================================
-          SYMPTOMS MODAL
-      ===================================================== */}
-
+      {/* Symptoms and Risk Screening Modal */}
       {isSymptomsModalOpen && (
         <div
           style={{
@@ -1279,8 +1024,7 @@ export default function App() {
             inset: 0,
             width: "100vw",
             height: "100vh",
-            background:
-              "rgba(0,0,0,0.7)",
+            background: "rgba(0,0,0,0.7)",
             zIndex: 99999999,
             display: "flex",
             justifyContent: "center",
@@ -1290,19 +1034,14 @@ export default function App() {
         >
           <div
             style={{
-              backgroundColor: isDarkMode
-                ? "#1e293b"
-                : "#ffffff",
-              color: isDarkMode
-                ? "#f8fafc"
-                : "#0f172a",
+              backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+              color: isDarkMode ? "#f8fafc" : "#0f172a",
               borderRadius: "16px",
               width: "100%",
               maxWidth: "680px",
               maxHeight: "90vh",
               overflowY: "auto",
-              boxShadow:
-                "0 20px 40px rgba(0,0,0,0.4)",
+              boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
               display: "flex",
               flexDirection: "column",
             }}
@@ -1310,30 +1049,17 @@ export default function App() {
             <div
               style={{
                 display: "flex",
-                justifyContent:
-                  "space-between",
+                justifyContent: "space-between",
                 alignItems: "center",
                 padding: "16px 20px",
-                borderBottom:
-                  "1px solid rgba(150,150,150,0.2)",
+                borderBottom: "1px solid rgba(150,150,150,0.2)",
               }}
             >
-              <h3
-                style={{
-                  margin: 0,
-                  fontSize: "1.2rem",
-                }}
-              >
-                ❤️ CKD Symptoms & Risk
-                Assessment
+              <h3 style={{ margin: 0, fontSize: "1.2rem" }}>
+                ❤️ CKD Symptoms & Risk Assessment
               </h3>
-
               <button
-                onClick={() =>
-                  setIsSymptomsModalOpen(
-                    false
-                  )
-                }
+                onClick={() => setIsSymptomsModalOpen(false)}
                 style={{
                   background: "transparent",
                   border: "none",
@@ -1351,68 +1077,44 @@ export default function App() {
               style={{
                 display: "flex",
                 gap: "4px",
-                padding:
-                  "8px 12px 0",
-                background: isDarkMode
-                  ? "#0f172a"
-                  : "#f8fafc",
+                padding: "8px 12px 0",
+                background: isDarkMode ? "#0f172a" : "#f8fafc",
               }}
             >
               <button
-                onClick={() =>
-                  setSymptomsTab(
-                    "overview"
-                  )
-                }
+                onClick={() => setSymptomsTab("overview")}
                 style={{
                   flex: 1,
                   padding: "10px",
-                  borderRadius:
-                    "8px 8px 0 0",
+                  borderRadius: "8px 8px 0 0",
                   border: "none",
                   background:
-                    symptomsTab ===
-                    "overview"
+                    symptomsTab === "overview"
                       ? "linear-gradient(135deg, #0284c7, #0369a1)"
                       : isDarkMode
                       ? "#1e293b"
                       : "#e2e8f0",
-                  color:
-                    symptomsTab ===
-                    "overview"
-                      ? "#fff"
-                      : "inherit",
+                  color: symptomsTab === "overview" ? "#fff" : "inherit",
                   fontWeight: "700",
                   cursor: "pointer",
                 }}
               >
                 📋 Symptoms Overview
               </button>
-
               <button
-                onClick={() =>
-                  setSymptomsTab(
-                    "evaluator"
-                  )
-                }
+                onClick={() => setSymptomsTab("evaluator")}
                 style={{
                   flex: 1,
                   padding: "10px",
-                  borderRadius:
-                    "8px 8px 0 0",
+                  borderRadius: "8px 8px 0 0",
                   border: "none",
                   background:
-                    symptomsTab ===
-                    "evaluator"
+                    symptomsTab === "evaluator"
                       ? "linear-gradient(135deg, #059669, #047857)"
                       : isDarkMode
                       ? "#1e293b"
                       : "#e2e8f0",
-                  color:
-                    symptomsTab ===
-                    "evaluator"
-                      ? "#fff"
-                      : "inherit",
+                  color: symptomsTab === "evaluator" ? "#fff" : "inherit",
                   fontWeight: "700",
                   cursor: "pointer",
                 }}
@@ -1421,238 +1123,107 @@ export default function App() {
               </button>
             </div>
 
-            <div
-              style={{ padding: "20px" }}
-            >
-              {symptomsTab ===
-                "overview" && (
+            <div style={{ padding: "20px" }}>
+              {symptomsTab === "overview" && (
                 <div>
                   <div
                     style={{
-                      backgroundColor:
-                        isDarkMode
-                          ? "#0f172a"
-                          : "#f1f5f9",
-                      borderRadius:
-                        "14px",
+                      backgroundColor: isDarkMode ? "#0f172a" : "#f1f5f9",
+                      borderRadius: "14px",
                       overflow: "hidden",
                     }}
                   >
                     <div
                       style={{
-                        background:
-                          "linear-gradient(135deg, #0284c7, #0369a1)",
+                        background: "linear-gradient(135deg, #0284c7, #0369a1)",
                         color: "#fff",
-                        padding:
-                          "14px 18px",
+                        padding: "14px 18px",
                         fontWeight: "700",
                       }}
                     >
-                      ❤️ Common Renal
-                      Manifestations
+                      ❤️ Common Renal Manifestations
                     </div>
-
                     <div
                       style={{
                         padding: "16px",
                         display: "grid",
-                        gridTemplateColumns:
-                          "1fr 1fr",
+                        gridTemplateColumns: "1fr 1fr",
                         gap: "12px",
-                        fontSize:
-                          "0.85rem",
+                        fontSize: "0.85rem",
                       }}
                     >
-                      <div
-                        style={{
-                          background:
-                            isDarkMode
-                              ? "#1e293b"
-                              : "#ffffff",
-                          padding: "12px",
-                          borderRadius:
-                            "10px",
-                        }}
-                      >
-                        <strong>
-                          💧 Fluid & Urinary
-                        </strong>
-                        <p>
-                          Foamy urine,
-                          swelling, and
-                          changes in
-                          urine output.
-                        </p>
+                      <div style={{ background: isDarkMode ? "#1e293b" : "#ffffff", padding: "12px", borderRadius: "10px" }}>
+                        <strong>💧 Fluid & Urinary</strong>
+                        <p>Foamy urine, swelling, and changes in urine output.</p>
                       </div>
-
-                      <div
-                        style={{
-                          background:
-                            isDarkMode
-                              ? "#1e293b"
-                              : "#ffffff",
-                          padding: "12px",
-                          borderRadius:
-                            "10px",
-                        }}
-                      >
-                        <strong>
-                          ⚡ Metabolic &
-                          Energy
-                        </strong>
-                        <p>
-                          Fatigue,
-                          weakness, and
-                          muscle cramps.
-                        </p>
+                      <div style={{ background: isDarkMode ? "#1e293b" : "#ffffff", padding: "12px", borderRadius: "10px" }}>
+                        <strong>⚡ Metabolic & Energy</strong>
+                        <p>Fatigue, weakness, and muscle cramps.</p>
                       </div>
-
-                      <div
-                        style={{
-                          background:
-                            isDarkMode
-                              ? "#1e293b"
-                              : "#ffffff",
-                          padding: "12px",
-                          borderRadius:
-                            "10px",
-                        }}
-                      >
-                        <strong>
-                          🩸 Cardiovascular
-                        </strong>
-                        <p>
-                          Hypertension
-                          and possible
-                          shortness of
-                          breath.
-                        </p>
+                      <div style={{ background: isDarkMode ? "#1e293b" : "#ffffff", padding: "12px", borderRadius: "10px" }}>
+                        <strong>🩸 Cardiovascular</strong>
+                        <p>Hypertension and possible shortness of breath.</p>
                       </div>
-
-                      <div
-                        style={{
-                          background:
-                            isDarkMode
-                              ? "#1e293b"
-                              : "#ffffff",
-                          padding: "12px",
-                          borderRadius:
-                            "10px",
-                        }}
-                      >
-                        <strong>
-                          🧬 Dermatologic &
-                          GI
-                        </strong>
-                        <p>
-                          Dry/itchy skin,
-                          nausea, and
-                          appetite
-                          changes.
-                        </p>
+                      <div style={{ background: isDarkMode ? "#1e293b" : "#ffffff", padding: "12px", borderRadius: "10px" }}>
+                        <strong>🧬 Dermatologic & GI</strong>
+                        <p>Dry/itchy skin, nausea, and appetite changes.</p>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {symptomsTab ===
-                "evaluator" && (
+              {symptomsTab === "evaluator" && (
                 <div>
-                  <p
-                    style={{
-                      fontSize: "0.9rem",
-                      opacity: 0.9,
-                    }}
-                  >
-                    Select symptoms and
-                    enter basic laboratory
-                    information for a simple
-                    screening estimate.
+                  <p style={{ fontSize: "0.9rem", opacity: 0.9 }}>
+                    Select symptoms and enter basic laboratory information for a simple screening estimate.
                   </p>
-
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns:
-                        "1fr 1fr",
+                      gridTemplateColumns: "1fr 1fr",
                       gap: "8px",
-                      marginBottom:
-                        "20px",
+                      marginBottom: "20px",
                     }}
                   >
-                    {symptoms.map(
-                      (
-                        symptom,
-                        index
-                      ) => {
-                        const selected =
-                          selectedSymptoms.includes(
-                            symptom
-                          );
-
-                        return (
-                          <div
-                            key={index}
-                            onClick={() =>
-                              handleSymptomToggle(
-                                symptom
-                              )
-                            }
-                            style={{
-                              padding:
-                                "8px 12px",
-                              borderRadius:
-                                "8px",
-                              border: selected
-                                ? "1px solid #059669"
-                                : "1px solid rgba(150,150,150,0.3)",
-                              backgroundColor:
-                                selected
-                                  ? isDarkMode
-                                    ? "#064e3b"
-                                    : "#d1fae5"
-                                  : isDarkMode
-                                  ? "#0f172a"
-                                  : "#f8fafc",
-                              cursor:
-                                "pointer",
-                              fontSize:
-                                "0.85rem",
-                              display:
-                                "flex",
-                              alignItems:
-                                "center",
-                              gap: "8px",
-                            }}
-                          >
-                            <span>
-                              {selected
-                                ? "💊"
-                                : "🔹"}
-                            </span>
-
-                            <span>
-                              {symptom}
-                            </span>
-                          </div>
-                        );
-                      }
-                    )}
+                    {symptoms.map((symptom, index) => {
+                      const selected = selectedSymptoms.includes(symptom);
+                      return (
+                        <div
+                          key={index}
+                          onClick={() => handleSymptomToggle(symptom)}
+                          style={{
+                            padding: "8px 12px",
+                            borderRadius: "8px",
+                            border: selected ? "1px solid #059669" : "1px solid rgba(150,150,150,0.3)",
+                            backgroundColor: selected
+                              ? isDarkMode
+                                ? "#064e3b"
+                                : "#d1fae5"
+                              : isDarkMode
+                              ? "#0f172a"
+                              : "#f8fafc",
+                            cursor: "pointer",
+                            fontSize: "0.85rem",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                          }}
+                        >
+                          <span>{selected ? "💊" : "🔹"}</span>
+                          <span>{symptom}</span>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <div
                     style={{
-                      backgroundColor:
-                        isDarkMode
-                          ? "#0f172a"
-                          : "#f8fafc",
+                      backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc",
                       padding: "15px",
-                      borderRadius:
-                        "10px",
+                      borderRadius: "10px",
                       display: "grid",
-                      gridTemplateColumns:
-                        "1fr 1fr 1fr",
+                      gridTemplateColumns: "1fr 1fr 1fr",
                       gap: "10px",
                     }}
                   >
@@ -1660,127 +1231,71 @@ export default function App() {
                       <label>Age</label>
                       <input
                         type="number"
+                        min="0"
                         value={evalAge}
-                        onChange={(e) =>
-                          setEvalAge(
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: "100%",
-                          padding:
-                            "6px",
-                        }}
+                        onChange={(e) => setEvalAge(e.target.value)}
+                        style={{ width: "100%", padding: "6px", boxSizing: "border-box" }}
                       />
                     </div>
-
                     <div>
-                      <label>
-                        Creatinine
-                      </label>
+                      <label>Creatinine</label>
                       <input
                         type="number"
+                        min="0"
                         step="0.1"
-                        value={
-                          evalCreatinine
-                        }
-                        onChange={(e) =>
-                          setEvalCreatinine(
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: "100%",
-                          padding:
-                            "6px",
-                        }}
+                        value={evalCreatinine}
+                        onChange={(e) => setEvalCreatinine(e.target.value)}
+                        style={{ width: "100%", padding: "6px", boxSizing: "border-box" }}
                       />
                     </div>
-
                     <div>
                       <label>Urea</label>
                       <input
                         type="number"
+                        min="0"
                         value={evalUrea}
-                        onChange={(e) =>
-                          setEvalUrea(
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: "100%",
-                          padding:
-                            "6px",
-                        }}
+                        onChange={(e) => setEvalUrea(e.target.value)}
+                        style={{ width: "100%", padding: "6px", boxSizing: "border-box" }}
                       />
                     </div>
                   </div>
 
                   <button
-                    onClick={
-                      calculateCKDRisk
-                    }
+                    onClick={calculateCKDRisk}
                     style={{
                       width: "100%",
-                      marginTop:
-                        "15px",
-                      padding:
-                        "10px",
-                      backgroundColor:
-                        "#059669",
+                      marginTop: "15px",
+                      padding: "10px",
+                      backgroundColor: "#059669",
                       color: "#fff",
                       border: "none",
-                      borderRadius:
-                        "8px",
-                      fontWeight:
-                        "bold",
-                      cursor:
-                        "pointer",
+                      borderRadius: "8px",
+                      fontWeight: "bold",
+                      cursor: "pointer",
                     }}
                   >
-                    Run Screening
-                    Assessment 🚀
+                    Run Screening Assessment 🚀
                   </button>
 
                   {evaluationResult && (
                     <div
                       style={{
-                        marginTop:
-                          "15px",
-                        padding:
-                          "12px",
-                        borderRadius:
-                          "8px",
-                        borderLeft:
-                          `5px solid ${evaluationResult.color}`,
-                        backgroundColor:
-                          isDarkMode
-                            ? "#0f172a"
-                            : "#f1f5f9",
+                        marginTop: "15px",
+                        padding: "12px",
+                        borderRadius: "8px",
+                        borderLeft: `5px solid ${evaluationResult.color}`,
+                        backgroundColor: isDarkMode ? "#0f172a" : "#f1f5f9",
                       }}
                     >
-                      <h4
-                        style={{
-                          color:
-                            evaluationResult.color,
-                          margin:
-                            "0 0 5px 0",
-                        }}
-                      >
-                        {
-                          evaluationResult.riskLevel
-                        }
+                      <h4 style={{ color: evaluationResult.color, margin: "0 0 5px 0" }}>
+                        {evaluationResult.riskLevel}
                       </h4>
-
                       <p>
-                        <strong>
-                          Screening
-                          result:
-                        </strong>{" "}
-                        {
-                          evaluationResult.stage
-                        }
+                        <strong>Screening result:</strong> {evaluationResult.stage}
                       </p>
+                      <small style={{ opacity: 0.75 }}>
+                        This is a screening estimate, not a clinical diagnosis.
+                      </small>
                     </div>
                   )}
                 </div>
@@ -1790,10 +1305,7 @@ export default function App() {
         </div>
       )}
 
-      {/* =====================================================
-          SIDEBAR
-      ===================================================== */}
-
+      {/* Left Sidebar Component */}
       <aside
         className="sidebar"
         style={{
@@ -1803,807 +1315,387 @@ export default function App() {
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          justifyContent:
-            "space-between",
+          justifyContent: "space-between",
           flexShrink: 0,
           boxSizing: "border-box",
           overflowY: "auto",
           zIndex: 10,
-          transform: isSidebarOpen
-            ? "translateX(0)"
-            : "translateX(-100%)",
-          transition:
-            "transform 0.3s ease",
-          position: isSidebarOpen
-            ? "relative"
-            : "absolute",
+          transform: isSidebarOpen ? "translateX(0)" : "translateX(-100%)",
+          transition: "transform 0.3s ease",
+          position: isSidebarOpen ? "relative" : "absolute",
         }}
       >
         <div>
-          <div
-            className="sidebar-header"
-            style={{
-              marginTop: "10px",
-            }}
-          >
+          <div className="sidebar-header" style={{ marginTop: "10px" }}>
             <div className="sidebar-brand">
-              <h2>
-                🥼🩺 MedCreative
-              </h2>
-
-              <span>
-                CLINICAL RAG ASSISTANT
-              </span>
+              <h2>🥼🩺 MedCreative</h2>
+              <span>CLINICAL RAG ASSISTANT</span>
             </div>
-
-            <img
-              src={logo}
-              alt="MedCreative Logo"
-              className="sidebar-logo"
-            />
+            <img src={logo} alt="MedCreative Logo" className="sidebar-logo" />
           </div>
 
-          <div
-            style={{
-              padding: "0 10px",
-              marginBottom: "15px",
-            }}
-          >
+          <div style={{ padding: "0 10px", marginBottom: "15px" }}>
             <button
-              onClick={() =>
-                setIsSymptomsModalOpen(
-                  true
-                )
-              }
+              onClick={() => setIsSymptomsModalOpen(true)}
               style={{
                 width: "100%",
-                padding:
-                  "12px 16px",
-                borderRadius:
-                  "12px",
-                border:
-                  "1px solid #cbd5e1",
-                backgroundColor:
-                  isDarkMode
-                    ? "#1e293b"
-                    : "#ffffff",
-                color: isDarkMode
-                  ? "#f8fafc"
-                  : "#0f172a",
+                padding: "12px 16px",
+                borderRadius: "12px",
+                border: "1px solid #cbd5e1",
+                backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                color: isDarkMode ? "#f8fafc" : "#0f172a",
                 fontWeight: "700",
                 cursor: "pointer",
               }}
             >
-              ❤️ 🩺 Symptoms &
-              Risk Menu
+              ❤️ 🩺 Symptoms & Risk Menu
             </button>
           </div>
 
           <div className="control-section">
-            <h3>
-              3D Interactive Model
-            </h3>
-
+            <h3>3D Interactive Model</h3>
             <KidneyModel />
           </div>
         </div>
 
-        <div
-          className="sidebar-footer"
-          style={{
-            paddingBottom: "20px",
-          }}
-        >
+        <div className="sidebar-footer" style={{ paddingBottom: "20px" }}>
           <button
             type="button"
             className="theme-toggle-modern-btn"
-            onClick={() =>
-              setIsDarkMode(
-                (previous) =>
-                  !previous
-              )
-            }
+            onClick={() => setIsDarkMode((previous) => !previous)}
             style={{
               width: "100%",
-              padding:
-                "12px 16px",
-              borderRadius:
-                "10px",
-              border:
-                "1px solid rgba(150,150,150,0.3)",
-              backgroundColor:
-                isDarkMode
-                  ? "#ffffff"
-                  : "#1e293b",
-              color: isDarkMode
-                ? "#0f172a"
-                : "#ffffff",
+              padding: "12px 16px",
+              borderRadius: "10px",
+              border: "1px solid rgba(150,150,150,0.3)",
+              backgroundColor: isDarkMode ? "#ffffff" : "#1e293b",
+              color: isDarkMode ? "#0f172a" : "#ffffff",
               fontWeight: "700",
               cursor: "pointer",
-              marginBottom:
-                "15px",
+              marginBottom: "15px",
             }}
           >
-            {isDarkMode
-              ? "☀️ Switch to Light Mode"
-              : "🌙 Switch to Dark Mode"}
+            {isDarkMode ? "☀️ Switch to Light Mode" : "🌙 Switch to Dark Mode"}
           </button>
 
           <div
             className="control-section"
             style={{
               marginTop: "10px",
-              borderTop:
-                "1px solid rgba(150,150,150,0.2)",
-              paddingTop:
-                "12px",
+              borderTop: "1px solid rgba(150,150,150,0.2)",
+              paddingTop: "12px",
             }}
           >
-            <h3
-              style={{
-                fontSize:
-                  "0.9rem",
-              }}
-            >
-              Parameters
-            </h3>
-
-            <div
-              className="control-group"
-              style={{
-                marginBottom:
-                  "8px",
-              }}
-            >
-              <label>
-                Retrieval K:{" "}
-                {retrievalK}
-              </label>
-
+            <h3 style={{ fontSize: "0.9rem" }}>Parameters</h3>
+            <div className="control-group" style={{ marginBottom: "8px" }}>
+              <label>Retrieval K: {retrievalK}</label>
               <input
                 type="range"
                 min="1"
                 max="10"
                 value={retrievalK}
-                onChange={(e) =>
-                  setRetrievalK(
-                    Number(
-                      e.target.value
-                    )
-                  )
-                }
-                style={{
-                  width: "100%",
-                }}
+                onChange={(e) => setRetrievalK(Number(e.target.value))}
+                style={{ width: "100%" }}
               />
             </div>
-
             <div className="control-group">
-              <label>
-                Distance Threshold:{" "}
-                {scoreThreshold}
-              </label>
-
+              <label>Distance Threshold: {scoreThreshold}</label>
               <input
                 type="range"
                 min="0.1"
                 max="2.0"
                 step="0.05"
-                value={
-                  scoreThreshold
-                }
-                onChange={(e) =>
-                  setScoreThreshold(
-                    Number(
-                      e.target.value
-                    )
-                  )
-                }
-                style={{
-                  width: "100%",
-                }}
+                value={scoreThreshold}
+                onChange={(e) => setScoreThreshold(Number(e.target.value))}
+                style={{ width: "100%" }}
               />
             </div>
           </div>
         </div>
       </aside>
 
-      {/* =====================================================
-          MAIN APP
-      ===================================================== */}
-
+      {/* Main Chat Area */}
       <main
         className="app-container"
         style={{
-          backgroundImage:
-            `url(${bgImage})`,
-          backgroundSize:
-            "cover",
-          backgroundPosition:
-            "center",
-          backgroundRepeat:
-            "no-repeat",
+          backgroundImage: `url(${bgImage})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
           position: "relative",
           display: "flex",
-          flexDirection:
-            "column",
+          flexDirection: "column",
           flex: 1,
           height: "100%",
           overflow: "hidden",
-          boxSizing:
-            "border-box",
+          boxSizing: "border-box",
         }}
       >
-        <div
-          className="dashboard-header"
-          style={{
-            flexShrink: 0,
-            padding:
-              "15px 20px",
-          }}
-        >
+        <div className="dashboard-header" style={{ flexShrink: 0, padding: "15px 20px" }}>
           <h1
             style={{
               display: "flex",
-              alignItems:
-                "center",
+              alignItems: "center",
               gap: "10px",
-              justifyContent:
-                "center",
+              justifyContent: "center",
               margin: 0,
-              fontSize:
-                "1.5rem",
+              fontSize: "1.5rem",
             }}
           >
-            ❤️ 🥼🩺 Chronic
-            Kidney Disease
-            (CKD) - RAG
+            ❤️ 🥼🩺 Chronic Kidney Disease (CKD) - RAG
           </h1>
-
           <p
             className="subtitle"
             style={{
-              margin:
-                "4px 0 0 0",
-              textAlign:
-                "center",
-              fontSize:
-                "0.85rem",
+              margin: "4px 0 0 0",
+              textAlign: "center",
+              fontSize: "0.85rem",
             }}
           >
-            Clinical Question →
-            Answer → Evidence →
-            Recommendations →
-            Risk/Safety Report 👨‍⚕️
+            Clinical Question → Answer → Evidence → Recommendations → Risk/Safety Report 👨‍⚕️
           </p>
         </div>
-
-        {/* ===================================================
-            CHAT
-        =================================================== */}
 
         <div
           className="chat-box"
           style={{
             flex: 1,
-            overflowY:
-              "auto",
-            padding:
-              "0 20px 100px 20px",
-            boxSizing:
-              "border-box",
+            overflowY: "auto",
+            padding: "0 20px 100px 20px",
+            boxSizing: "border-box",
             display: "flex",
-            flexDirection:
-              "column",
+            flexDirection: "column",
           }}
         >
-          {messages.map(
-            (message, index) => {
-              const isBot =
-                message.sender ===
-                "bot";
+          {messages.map((message, index) => {
+            const isBot = message.sender === "bot";
+            const metrics = message.evaluationMetrics;
+            const contextRel = Number(metrics?.context_relevance_score ?? 1);
+            const faith = Number(metrics?.faithfulness_score ?? 1);
+            const highRisk =
+              metrics &&
+              (contextRel < 0.3 ||
+                faith < 0.8 ||
+                String(metrics.hallucination_risk || "").toLowerCase().includes("high"));
+            const isSmallOutput = message.text && message.text.length < 80;
 
-              const metrics =
-                message.evaluationMetrics;
-
-              const contextRel =
-                Number(
-                  metrics?.context_relevance_score ??
-                    1
-                );
-
-              const faith =
-                Number(
-                  metrics?.faithfulness_score ??
-                    1
-                );
-
-              const highRisk =
-                metrics &&
-                (
-                  contextRel <
-                    0.3 ||
-                  faith < 0.8 ||
-                  String(
-                    metrics.hallucination_risk ||
-                      ""
-                  )
-                    .toLowerCase()
-                    .includes("high")
-                );
-
-              const isSmallOutput =
-                message.text &&
-                message.text.length <
-                  80;
-
-              return (
-                <div
-                  key={index}
-                  ref={
-                    index ===
-                    messages.length -
-                      1
-                      ? latestMessageRef
-                      : null
-                  }
-                  className={`message-row ${
-                    isBot
-                      ? "bot-row"
-                      : "user-row"
-                  }`}
-                >
-                  <div
-                    className={`message-bubble ${
-                      isBot
-                        ? "bot-bubble"
-                        : "user-bubble"
-                    }`}
-                  >
-                    {isBot ? (
-                      <div className="bot-bubble-content-wrapper">
-                        {message.warningMessage && (
-                          <div
-                            style={{
-                              backgroundColor:
-                                "#fff3cd",
-                              color:
-                                "#856404",
-                              padding:
-                                "10px 14px",
-                              borderRadius:
-                                "6px",
-                              marginBottom:
-                                "12px",
-                            }}
-                          >
-                            ⚠️{" "}
-                            <strong>
-                              Notice:
-                            </strong>{" "}
-                            {
-                              message.warningMessage
-                            }
-                          </div>
-                        )}
-
-                        <div className="report-sections-flow">
-                          <div
-                            className="report-section-block"
-                            style={{
-                              width:
-                                "fit-content",
-                            }}
-                          >
-                            <div className="report-section-title">
-                              📌 Synthesized
-                              Answer
-                            </div>
-
-                            <div
-                              className="formatted-answer-box"
-                              dir={
-                                message.currentLanguage ===
-                                "ar"
-                                  ? "rtl"
-                                  : "ltr"
-                              }
-                            >
-                              {message.isConversational
-                                ? message.text
-                                : formatAnswer(
-                                    message.text
-                                  )}
-                            </div>
-                          </div>
+            return (
+              <div
+                key={index}
+                ref={index === messages.length - 1 ? latestMessageRef : null}
+                className={`message-row ${isBot ? "bot-row" : "user-row"}`}
+              >
+                <div className={`message-bubble ${isBot ? "bot-bubble" : "user-bubble"}`}>
+                  {isBot ? (
+                    <div className="bot-bubble-content-wrapper">
+                      {message.warningMessage && (
+                        <div
+                          style={{
+                            backgroundColor: "#fff3cd",
+                            color: "#856404",
+                            padding: "10px 14px",
+                            borderRadius: "6px",
+                            marginBottom: "12px",
+                          }}
+                        >
+                          ⚠️ <strong>Notice:</strong> {message.warningMessage}
                         </div>
+                      )}
 
-                        {/* =================================
-                            RISK / SAFETY PANEL
-                        ================================= */}
-
-                        <div className="right-panel-dropdown-container">
-                          <details>
-                            <summary className="right-panel-dropdown-header">
-                              <span>
-                                🛡️ Risk &
-                                Safety Report
-                              </span>
-
-                              <span className="dropdown-arrow">
-                                ▼
-                              </span>
-                            </summary>
-
-                            <div className="right-panel-stack">
-                              <div
-                                className="action-buttons-stack"
-                                style={{
-                                  gap: "6px",
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  className="action-btn translate-btn"
-                                  onClick={() =>
-                                    translateMessage(
-                                      index
-                                    )
-                                  }
-                                  disabled={
-                                    message.translating
-                                  }
-                                >
-                                  {message.translating
-                                    ? "⏳ Translating..."
-                                    : message.currentLanguage ===
-                                      "ar"
-                                    ? "🌐 Translate to English"
-                                    : "🌐 Translate to Arabic"}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="action-btn speak-btn"
-                                  onClick={() =>
-                                    speakAnswer(
-                                      message.text,
-                                      index
-                                    )
-                                  }
-                                >
-                                  {speakingIndex ===
-                                  index
-                                    ? "🛑 Stop Reading"
-                                    : "🔊 Read Aloud"}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="action-btn copy-btn"
-                                  onClick={() =>
-                                    copyResponseText(
-                                      message.text,
-                                      index
-                                    )
-                                  }
-                                >
-                                  {message.copied
-                                    ? "✨ Copied!"
-                                    : "📋 Copy Report"}
-                                </button>
-                              </div>
-
-                              {metrics &&
-                                !isSmallOutput && (
-                                  <div
-                                    className={`evaluation-metrics-panel ${
-                                      highRisk
-                                        ? "panel-risk-high"
-                                        : "panel-risk-low"
-                                    }`}
-                                  >
-                                    <div className="metrics-header">
-                                      🛡️ RISK &
-                                      SAFETY REPORT
-                                    </div>
-
-                                    <div className="metrics-grid">
-                                      <div className="metric-tag">
-                                        Faithfulness:{" "}
-                                        <strong>
-                                          {faith >=
-                                          0.8
-                                            ? "🟢 ✔️"
-                                            : "🔴 ❌"}{" "}
-                                          {
-                                            metrics.faithfulness_score
-                                          }
-                                        </strong>
-                                      </div>
-
-                                      <div className="metric-tag">
-                                        Answer
-                                        Relevance:{" "}
-                                        <strong>
-                                          {
-                                            metrics.answer_relevance_score
-                                          }
-                                        </strong>
-                                      </div>
-
-                                      <div className="metric-tag">
-                                        Context
-                                        Relevance:{" "}
-                                        <strong>
-                                          {
-                                            metrics.context_relevance_score
-                                          }
-                                        </strong>
-                                      </div>
-
-                                      <div
-                                        className={`metric-tag ${
-                                          highRisk
-                                            ? "risk-high"
-                                            : "risk-low"
-                                        }`}
-                                      >
-                                        Risk:{" "}
-                                        <strong>
-                                          {highRisk
-                                            ? "High"
-                                            : metrics.hallucination_risk}
-                                        </strong>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                            </div>
-                          </details>
-                        </div>
-                      </div>
-                    ) : (
+                      {/* Top Action Buttons (Translation, Audio/Read Aloud, Copy) right above the synthesized answer box */}
                       <div
-                        dir={
-                          detectLanguage(
-                            message.text
-                          ) === "ar"
-                            ? "rtl"
-                            : "ltr"
-                        }
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: "8px",
+                          marginBottom: "12px",
+                          paddingBottom: "10px",
+                          borderBottom: "1px solid rgba(150,150,150,0.2)",
+                        }}
                       >
-                        {message.text}
+                        <button
+                          type="button"
+                          className="action-btn translate-btn"
+                          onClick={() => translateMessage(index)}
+                          disabled={message.translating}
+                          style={{
+                            padding: "6px 12px",
+                            borderRadius: "8px",
+                            border: "1px solid #0284c7",
+                            background: "rgba(2, 132, 199, 0.1)",
+                            color: isDarkMode ? "#38bdf8" : "#0284c7",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          {message.translating
+                            ? "⏳ Translating..."
+                            : message.currentLanguage === "ar"
+                            ? "🌐 Translate to English"
+                            : "🌐 Translate to Arabic"}
+                        </button>
+                        <button
+                          type="button"
+                          className="action-btn speak-btn"
+                          onClick={() => speakAnswer(message.text, index)}
+                          style={{
+                            padding: "6px 12px",
+                            borderRadius: "8px",
+                            border: "1px solid #059669",
+                            background: "rgba(5, 150, 105, 0.1)",
+                            color: isDarkMode ? "#34d399" : "#059669",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          {speakingIndex === index ? "🛑 Stop Reading" : "🔊 Read Aloud"}
+                        </button>
+                        <button
+                          type="button"
+                          className="action-btn copy-btn"
+                          onClick={() => copyResponseText(message.text, index)}
+                          style={{
+                            padding: "6px 12px",
+                            borderRadius: "8px",
+                            border: "1px solid #64748b",
+                            background: "rgba(100, 116, 139, 0.1)",
+                            color: isDarkMode ? "#cbd5e1" : "#475569",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          {message.copied ? "✨ Copied!" : "📋 Copy Report"}
+                        </button>
                       </div>
-                    )}
-                  </div>
 
-                  {/* =========================================
-                      SOURCES
-                  ========================================= */}
-
-                  {isBot &&
-                    message.sources
-                      ?.length >
-                      0 && (
-                      <div className="sources-dropdown-container">
-                        <details>
-                          <summary className="sources-dropdown-header">
-                            📚 Supporting
-                            Evidence &
-                            Guidelines (
-                            {
-                              message
-                                .sources
-                                .length
-                            }
-                            )
-                            <span>
-                              ▼
-                            </span>
-                          </summary>
-
-                          <div className="sources-dropdown-content">
-                            {message.sources.map(
-                              (
-                                source,
-                                sourceIndex
-                              ) => {
-                                const docName =
-                                  source
-                                    ?.metadata
-                                    ?.document_name ||
-                                  source
-                                    ?.metadata
-                                    ?.filename ||
-                                  "KDIGO Clinical Guidelines";
-
-                                const pageNum =
-                                  source
-                                    ?.metadata
-                                    ?.page ||
-                                  source
-                                    ?.metadata
-                                    ?.page_number ||
-                                  "N/A";
-
-                                const sourceText =
-                                  source?.content ||
-                                  source?.text ||
-                                  "No snippet available.";
-
-                                return (
-                                  <div
-                                    className="source-item-card"
-                                    key={
-                                      sourceIndex
-                                    }
-                                    style={{
-                                      display:
-                                        "flex",
-                                      flexDirection:
-                                        "column",
-                                      gap:
-                                        "4px",
-                                    }}
-                                  >
-                                    <span className="source-tag">
-                                      Reference
-                                      Item [
-                                      {sourceIndex +
-                                        1}
-                                      ]
-                                    </span>
-
-                                    <div className="source-line">
-                                      <strong>
-                                        document
-                                        name:
-                                      </strong>{" "}
-                                      {
-                                        docName
-                                      }
-                                    </div>
-
-                                    <div className="source-line">
-                                      <strong>
-                                        page:
-                                      </strong>{" "}
-                                      {
-                                        pageNum
-                                      }
-                                    </div>
-
-                                    <div className="source-line">
-                                      <strong>
-                                        source:
-                                      </strong>{" "}
-                                      "
-                                      {
-                                        sourceText
-                                      }
-                                      "
-                                    </div>
-                                  </div>
-                                );
-                              }
-                            )}
+                      <div className="report-sections-flow">
+                        <div className="report-section-block" style={{ width: "fit-content" }}>
+                          <div className="report-section-title">📌 Synthesized Answer</div>
+                          <div
+                            className="formatted-answer-box"
+                            dir={message.currentLanguage === "ar" ? "rtl" : "ltr"}
+                          >
+                            {message.isConversational
+                              ? message.text
+                              : formatAnswer(message.text)}
                           </div>
-                        </details>
+                        </div>
                       </div>
-                    )}
+                    </div>
+                  ) : (
+                    <div dir={detectLanguage(message.text) === "ar" ? "rtl" : "ltr"}>
+                      {message.text}
+                    </div>
+                  )}
                 </div>
-              );
-            }
-          )}
 
-          {/* ===============================================
-              LOADING
-          =============================================== */}
+                {isBot && message.sources?.length > 0 && (
+                  <div className="sources-dropdown-container">
+                    <details>
+                      <summary className="sources-dropdown-header">
+                        📚 Supporting Evidence & Guidelines ({message.sources.length})
+                        <span>▼</span>
+                      </summary>
+                      <div className="sources-dropdown-content">
+                        {message.sources.map((source, sourceIndex) => {
+                          const docName =
+                            source?.metadata?.document_name ||
+                            source?.metadata?.filename ||
+                            "KDIGO Clinical Guidelines";
+                          const pageNum =
+                            source?.metadata?.page || source?.metadata?.page_number || "N/A";
+                          const sourceText = source?.content || source?.text || "No snippet available.";
+
+                          return (
+                            <div
+                              className="source-item-card"
+                              key={sourceIndex}
+                              style={{ display: "flex", flexDirection: "column", gap: "4px" }}
+                            >
+                              <span className="source-tag">Reference Item [{sourceIndex + 1}]</span>
+                              <div className="source-line">
+                                <strong>document name:</strong> {docName}
+                              </div>
+                              <div className="source-line">
+                                <strong>page:</strong> {pageNum}
+                              </div>
+                              <div className="source-line">
+                                <strong>source:</strong> "{sourceText}"
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {loading && (
-            <div
-              className="message-row bot-row"
-              ref={latestMessageRef}
-            >
+            <div className="message-row bot-row" ref={latestMessageRef}>
               <div className="message-bubble bot-bubble">
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems:
-                      "center",
-                    gap: "10px",
-                  }}
-                >
-                  ⏳ Synthesizing
-                  clinical guidelines...
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  ⏳ Synthesizing clinical guidelines...
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* =================================================
-            CHAT INPUT
-        ================================================= */}
-
+        {/* Chat Input Form */}
         <form
           onSubmit={handleSubmit}
           className="chat-input-form"
           style={{
             display: "flex",
-            alignItems:
-              "center",
+            alignItems: "center",
             gap: "14px",
-            background:
-              isDarkMode
-                ? "rgba(30,41,59,0.95)"
-                : "rgba(255,255,255,0.95)",
-            backdropFilter:
-              "blur(12px)",
-            border:
-              "1px solid rgba(150,150,150,0.3)",
-            padding:
-              "12px 20px",
-            borderRadius:
-              "16px",
-            width:
-              "calc(100% - 40px)",
-            maxWidth:
-              "1000px",
-            position:
-              "absolute",
+            background: isDarkMode ? "rgba(30,41,59,0.95)" : "rgba(255,255,255,0.95)",
+            backdropFilter: "blur(12px)",
+            border: "1px solid rgba(150,150,150,0.3)",
+            padding: "12px 20px",
+            borderRadius: "16px",
+            width: "calc(100% - 40px)",
+            maxWidth: "1000px",
+            position: "absolute",
             bottom: "15px",
             left: "50%",
-            transform:
-              "translateX(-50%)",
-            boxShadow:
-              "0 10px 30px rgba(0,0,0,0.3)",
+            transform: "translateX(-50%)",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
             zIndex: 99,
           }}
         >
           <button
             type="button"
-            onClick={
-              toggleVoiceInput
-            }
+            onClick={toggleVoiceInput}
+            disabled={loading}
             style={{
-              background:
-                isListening
-                  ? "rgba(239,68,68,0.4)"
-                  : "rgba(255,255,255,0.2)",
-              border:
-                isListening
-                  ? "2px solid #ef4444"
-                  : "1px solid rgba(255,255,255,0.4)",
-              cursor:
-                "pointer",
-              fontSize:
-                "1.1rem",
-              padding:
-                "8px 10px",
-              borderRadius:
-                "10px",
+              background: isListening ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.2)",
+              border: isListening ? "2px solid #ef4444" : "1px solid rgba(255,255,255,0.4)",
+              cursor: loading ? "not-allowed" : "pointer",
+              fontSize: "1.1rem",
+              padding: "8px 10px",
+              borderRadius: "10px",
+              opacity: loading ? 0.5 : 1,
             }}
-            title={
-              isListening
-                ? "Listening... Click to stop"
-                : "Voice Input"
-            }
+            title={isListening ? "Listening... Click to stop" : "Voice Input"}
           >
-            {isListening
-              ? "🔴"
-              : "🎙️"}
+            {isListening ? "🔴" : "🎙️"}
           </button>
 
           <input
             type="text"
             value={input}
-            onChange={(e) =>
-              setInput(
-                e.target.value
-              )
-            }
+            onChange={(e) => {
+              const value = e.target.value;
+              setInput(value);
+              inputValRef.current = value;
+            }}
             placeholder={
               isListening
                 ? "Listening to your voice..."
@@ -2612,53 +1704,109 @@ export default function App() {
             disabled={loading}
             style={{
               flex: 1,
-              background:
-                "transparent",
+              background: "transparent",
               border: "none",
-              color:
-                "inherit",
-              fontSize:
-                "1rem",
-              outline:
-                "none",
+              color: "inherit",
+              fontSize: "1rem",
+              outline: "none",
             }}
           />
 
           <button
             type="submit"
-            disabled={
-              loading ||
-              !input.trim()
-            }
+            disabled={loading || !input.trim()}
             style={{
-              padding:
-                "8px 18px",
-              borderRadius:
-                "10px",
-              border:
-                "none",
-              fontWeight:
-                "bold",
-              cursor:
-                loading ||
-                !input.trim()
-                  ? "not-allowed"
-                  : "pointer",
-              background:
-                "#0284c7",
-              color:
-                "#fff",
-              opacity:
-                loading ||
-                !input.trim()
-                  ? 0.6
-                  : 1,
+              padding: "8px 18px",
+              borderRadius: "10px",
+              border: "none",
+              fontWeight: "bold",
+              cursor: loading || !input.trim() ? "not-allowed" : "pointer",
+              background: "#0284c7",
+              color: "#fff",
+              opacity: loading || !input.trim() ? "0.6" : "1",
             }}
           >
             Send 🚀
           </button>
         </form>
       </main>
+
+      {/* Retractable Right-Side Panel (Risk & Safety Report) */}
+      <aside
+        style={{
+          width: "320px",
+          minWidth: "320px",
+          maxWidth: "320px",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          flexShrink: 0,
+          boxSizing: "border-box",
+          overflowY: "auto",
+          zIndex: 10,
+          backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc",
+          borderLeft: isDarkMode ? "1px solid #334155" : "1px solid #e2e8f0",
+          padding: "20px",
+          transform: isRightPanelOpen ? "translateX(0)" : "translateX(100%)",
+          transition: "transform 0.3s ease",
+          position: isRightPanelOpen ? "relative" : "absolute",
+          right: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "15px" }}>
+          <h3 style={{ margin: 0, fontSize: "1.1rem", display: "flex", alignItems: "center", gap: "8px" }}>
+            🛡️ Risk & Safety Panel
+          </h3>
+          <button
+            onClick={() => setIsRightPanelOpen(false)}
+            style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "1.1rem", color: "inherit" }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <p style={{ fontSize: "0.85rem", opacity: 0.8, marginBottom: "20px" }}>
+          This panel monitors metrics like answer faithfulness and context relevance across your RAG queries.
+        </p>
+
+        {messages.length > 0 && messages[messages.length - 1].evaluationMetrics ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            {(() => {
+              const lastMsg = messages[messages.length - 1];
+              const metrics = lastMsg.evaluationMetrics;
+              if (!metrics) return <p style={{ fontSize: "0.85rem" }}>No metrics for current conversation turn.</p>;
+              const faith = Number(metrics.faithfulness_score ?? 1);
+              const contextRel = Number(metrics.context_relevance_score ?? 1);
+              const highRisk = contextRel < 0.3 || faith < 0.8 || String(metrics.hallucination_risk || "").toLowerCase().includes("high");
+
+              return (
+                <div
+                  style={{
+                    padding: "14px",
+                    borderRadius: "12px",
+                    background: isDarkMode ? "#1e293b" : "#ffffff",
+                    border: highRisk ? "1px solid #ef4444" : "1px solid #10b981",
+                  }}
+                >
+                  <div style={{ fontWeight: "bold", marginBottom: "10px", fontSize: "0.9rem" }}>
+                    Latest Turn Safety Metrics:
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "0.85rem" }}>
+                    <div>Faithfulness: <strong>{faith >= 0.8 ? "🟢 ✔️" : "🔴 ❌"} {metrics.faithfulness_score}</strong></div>
+                    <div>Answer Relevance: <strong>{metrics.answer_relevance_score}</strong></div>
+                    <div>Context Relevance: <strong>{metrics.context_relevance_score}</strong></div>
+                    <div>Risk Status: <strong style={{ color: highRisk ? "#ef4444" : "#10b981" }}>{highRisk ? "High Risk" : metrics.hallucination_risk}</strong></div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        ) : (
+          <div style={{ fontSize: "0.85rem", opacity: 0.6 }}>
+            Ask a clinical question to view real-time RAG evaluation and safety metrics here.
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

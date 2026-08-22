@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
 from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -74,7 +74,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://med-creative-rag-system-1.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -116,23 +121,23 @@ CHROMA_PATH = "./chroma_db"
 
 
 # ============================================================
-# 5. EMBEDDINGS (OPTIMIZED CLOUD API EMBEDDINGS)
+# 5. EMBEDDINGS (LOCAL OPEN-SOURCE CPU EMBEDDINGS)
 # ============================================================
 
-logger.info("Loading Cloud API embedding model for zero-overhead CPU performance...")
+logger.info("Loading local HuggingFace embedding model for zero-overhead CPU performance...")
 
 try:
 
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        openai_api_key=GROQ_API_KEY
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        encode_kwargs={"normalize_embeddings": True}
     )
 
-    logger.info("Cloud embedding model loaded successfully.")
+    logger.info("Local embedding model loaded successfully.")
 
 except Exception as e:
 
-    logger.exception("Failed to load cloud embedding model.")
+    logger.exception("Failed to load local embedding model.")
 
     raise RuntimeError(
         f"Could not load embedding model: {e}"
@@ -841,16 +846,10 @@ def build_conversational_payload(
 
 
 # ============================================================
-# 20. MAIN CHAT ENDPOINT (ASYNC OPTIMIZED)
+# 20. CORE CHAT LOGIC FUNCTION
 # ============================================================
 
-@app.post(
-    "/chat",
-    response_model=ChatResponse
-)
-async def chat_endpoint(
-    request: ChatRequest
-):
+async def core_chat_logic(request: ChatRequest) -> ChatResponse:
 
     start_time = time.time()
 
@@ -1207,7 +1206,7 @@ async def chat_endpoint(
     except Exception as e:
 
         logger.error(
-            "Unexpected error in /chat endpoint:"
+            "Unexpected error in chat endpoint:"
         )
 
         traceback.print_exc()
@@ -1219,6 +1218,30 @@ async def chat_endpoint(
                 "an internal error. Please try again."
             )
         )
+
+
+# ============================================================
+# 20. MAIN CHAT ENDPOINTS (MULTI-ROUTE TO PREVENT 404S)
+# ============================================================
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint_noslash(request: ChatRequest):
+    return await core_chat_logic(request)
+
+
+@app.post("/chat/", response_model=ChatResponse)
+async def chat_endpoint_slash(request: ChatRequest):
+    return await core_chat_logic(request)
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def api_chat_endpoint_noslash(request: ChatRequest):
+    return await core_chat_logic(request)
+
+
+@app.post("/api/chat/", response_model=ChatResponse)
+async def api_chat_endpoint_slash(request: ChatRequest):
+    return await core_chat_logic(request)
 
 
 # ============================================================
