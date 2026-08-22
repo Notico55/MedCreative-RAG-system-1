@@ -340,8 +340,6 @@ export default function App() {
   const [scoreThreshold, setScoreThreshold] = useState(1.2);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  
-  // Retractable Right-Side Panel State (Closed by default on app load)[cite: 2]
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
 
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
@@ -380,13 +378,6 @@ export default function App() {
   useEffect(() => {
     scoreThresholdRef.current = scoreThreshold;
   }, [scoreThreshold]);
-
-  useEffect(() => {
-    console.log("----------------------------------------");
-    console.log("[MedCreative Frontend Origin]:", window.location.origin);
-    console.log("[MedCreative Active Backend URL]:", API_BASE_URL);
-    console.log("----------------------------------------");
-  }, []);
 
   useEffect(() => {
     latestMessageRef.current?.scrollIntoView({
@@ -826,7 +817,7 @@ export default function App() {
         {isSidebarOpen ? "◀ Hide Sidebar" : "▶ Open Sidebar"}
       </button>
 
-      {/* Right Side Panel Toggle Button (Risk & Safety Tab Drawer) */}
+      {/* Right Side Panel Toggle Button */}
       <button
         onClick={() => setIsRightPanelOpen((previous) => !previous)}
         title={isRightPanelOpen ? "Collapse Risk & Safety Panel" : "Open Risk & Safety Panel"}
@@ -1469,15 +1460,6 @@ export default function App() {
         >
           {messages.map((message, index) => {
             const isBot = message.sender === "bot";
-            const metrics = message.evaluationMetrics;
-            const contextRel = Number(metrics?.context_relevance_score ?? 1);
-            const faith = Number(metrics?.faithfulness_score ?? 1);
-            const highRisk =
-              metrics &&
-              (contextRel < 0.3 ||
-                faith < 0.8 ||
-                String(metrics.hallucination_risk || "").toLowerCase().includes("high"));
-            const isSmallOutput = message.text && message.text.length < 80;
 
             return (
               <div
@@ -1502,7 +1484,6 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Action Buttons & Synthesized Answer Container with Side-by-Side Flex Layout */}
                       <div
                         style={{
                           display: "flex",
@@ -1513,7 +1494,6 @@ export default function App() {
                           width: "100%",
                         }}
                       >
-                        {/* Output box on the left */}
                         <div className="report-sections-flow" style={{ flex: 1, minWidth: 0 }}>
                           <div className="report-section-block" style={{ width: "fit-content" }}>
                             <div className="report-section-title">📌 Synthesized Answer</div>
@@ -1528,7 +1508,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Action buttons on the right (hidden on desktop via CSS class / media query if needed, or structured dynamically) */}
+                        {/* Minimal Round Icon Buttons Container (No Rectangular Box Look) */}
                         <div
                           className="desktop-action-buttons-wrapper"
                           style={{
@@ -1540,62 +1520,79 @@ export default function App() {
                         >
                           <button
                             type="button"
-                            className="action-btn translate-btn mobile-hidden-action-btn"
+                            title={message.currentLanguage === "ar" ? "Translate to English" : "Translate to Arabic"}
                             onClick={() => translateMessage(index)}
                             disabled={message.translating}
                             style={{
-                              padding: "6px 12px",
-                              borderRadius: "8px",
-                              border: "1px solid #0284c7",
-                              background: "rgba(2, 132, 199, 0.1)",
+                              width: "36px",
+                              height: "36px",
+                              borderRadius: "50%",
+                              border: "none",
+                              background: isDarkMode ? "rgba(30, 41, 59, 0.8)" : "rgba(241, 245, 249, 0.9)",
                               color: isDarkMode ? "#38bdf8" : "#0284c7",
-                              fontWeight: "600",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                               cursor: "pointer",
-                              fontSize: "0.85rem",
-                              whiteSpace: "nowrap",
+                              boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                              transition: "transform 0.2s, background 0.2s",
                             }}
                           >
-                            {message.translating
-                              ? "⏳ Translating..."
-                              : message.currentLanguage === "ar"
-                              ? "🌐 Translate to English"
-                              : "🌐 Translate to Arabic"}
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="12" r="10"></circle>
+                              <line x1="2" y1="12" x2="22" y2="12"></line>
+                              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                            </svg>
                           </button>
+
                           <button
                             type="button"
-                            className="action-btn speak-btn mobile-hidden-action-btn"
+                            title={speakingIndex === index ? "Stop Reading" : "Read Aloud"}
                             onClick={() => speakAnswer(message.text, index)}
                             style={{
-                              padding: "6px 12px",
-                              borderRadius: "8px",
-                              border: "1px solid #059669",
-                              background: "rgba(5, 150, 105, 0.1)",
+                              width: "36px",
+                              height: "36px",
+                              borderRadius: "50%",
+                              border: "none",
+                              background: isDarkMode ? "rgba(30, 41, 59, 0.8)" : "rgba(241, 245, 249, 0.9)",
                               color: isDarkMode ? "#34d399" : "#059669",
-                              fontWeight: "600",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                               cursor: "pointer",
-                              fontSize: "0.85rem",
-                              whiteSpace: "nowrap",
+                              boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                              transition: "transform 0.2s, background 0.2s",
                             }}
                           >
-                            {speakingIndex === index ? "🛑 Stop Reading" : "🔊 Read Aloud"}
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                            </svg>
                           </button>
+
                           <button
                             type="button"
-                            className="action-btn copy-btn mobile-hidden-action-btn"
+                            title={message.copied ? "Copied!" : "Copy Report"}
                             onClick={() => copyResponseText(message.text, index)}
                             style={{
-                              padding: "6px 12px",
-                              borderRadius: "8px",
-                              border: "1px solid #64748b",
-                              background: "rgba(100, 116, 139, 0.1)",
+                              width: "36px",
+                              height: "36px",
+                              borderRadius: "50%",
+                              border: "none",
+                              background: isDarkMode ? "rgba(30, 41, 59, 0.8)" : "rgba(241, 245, 249, 0.9)",
                               color: isDarkMode ? "#cbd5e1" : "#475569",
-                              fontWeight: "600",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                               cursor: "pointer",
-                              fontSize: "0.85rem",
-                              whiteSpace: "nowrap",
+                              boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                              transition: "transform 0.2s, background 0.2s",
                             }}
                           >
-                            {message.copied ? "✨ Copied!" : "📋 Copy Report"}
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
                           </button>
                         </div>
                       </div>
@@ -1746,7 +1743,7 @@ export default function App() {
         </form>
       </main>
 
-      {/* Retractable Right-Side Panel (Risk & Safety Report + Mobile-Only Action Buttons) */}
+      {/* Retractable Right-Side Panel */}
       <aside
         style={{
           width: "320px",
@@ -1780,13 +1777,13 @@ export default function App() {
           </button>
         </div>
 
-        {/* Mobile-Only Action Buttons Section inside the Right Retractable Panel */}
+        {/* Mobile-Only Action Controls */}
         <div className="mobile-only-actions-section" style={{ display: "none", marginBottom: "20px", paddingBottom: "15px", borderBottom: "1px solid rgba(150,150,150,0.2)" }}>
           <div style={{ fontWeight: "bold", marginBottom: "10px", fontSize: "0.9rem" }}>
             📱 Response Actions (Mobile):
           </div>
           {messages.length > 0 && messages[messages.length - 1].sender === "bot" ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ display: "flex", flexDirection: "row", gap: "10px", alignItems: "center" }}>
               {(() => {
                 const latestBotIndex = messages.length - 1;
                 const latestMsg = messages[latestBotIndex];
@@ -1794,59 +1791,71 @@ export default function App() {
                   <>
                     <button
                       type="button"
+                      title="Translate"
                       onClick={() => translateMessage(latestBotIndex)}
                       disabled={latestMsg.translating}
                       style={{
-                        padding: "8px 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #0284c7",
-                        background: "rgba(2, 132, 199, 0.1)",
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        border: "none",
+                        background: isDarkMode ? "#1e293b" : "#e2e8f0",
                         color: isDarkMode ? "#38bdf8" : "#0284c7",
-                        fontWeight: "600",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         cursor: "pointer",
-                        fontSize: "0.85rem",
-                        textAlign: "left",
                       }}
                     >
-                      {latestMsg.translating
-                        ? "⏳ Translating..."
-                        : latestMsg.currentLanguage === "ar"
-                        ? "🌐 Translate to English"
-                        : "🌐 Translate to Arabic"}
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="2" y1="12" x2="22" y2="12"></line>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                      </svg>
                     </button>
                     <button
                       type="button"
+                      title="Read Aloud"
                       onClick={() => speakAnswer(latestMsg.text, latestBotIndex)}
                       style={{
-                        padding: "8px 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #059669",
-                        background: "rgba(5, 150, 105, 0.1)",
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        border: "none",
+                        background: isDarkMode ? "#1e293b" : "#e2e8f0",
                         color: isDarkMode ? "#34d399" : "#059669",
-                        fontWeight: "600",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         cursor: "pointer",
-                        fontSize: "0.85rem",
-                        textAlign: "left",
                       }}
                     >
-                      {speakingIndex === latestBotIndex ? "🛑 Stop Reading" : "🔊 Read Aloud"}
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                      </svg>
                     </button>
                     <button
                       type="button"
+                      title="Copy"
                       onClick={() => copyResponseText(latestMsg.text, latestBotIndex)}
                       style={{
-                        padding: "8px 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #64748b",
-                        background: "rgba(100, 116, 139, 0.1)",
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        border: "none",
+                        background: isDarkMode ? "#1e293b" : "#e2e8f0",
                         color: isDarkMode ? "#cbd5e1" : "#475569",
-                        fontWeight: "600",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         cursor: "pointer",
-                        fontSize: "0.85rem",
-                        textAlign: "left",
                       }}
                     >
-                      {latestMsg.copied ? "✨ Copied!" : "📋 Copy Report"}
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
                     </button>
                   </>
                 );
@@ -1900,7 +1909,7 @@ export default function App() {
         )}
       </aside>
 
-      {/* Inline Responsive Styles for Mobile-Only Action Controls */}
+      {/* Inline Responsive Styles for Mobile Actions Display */}
       <style>{`
         @media (max-width: 768px) {
           .mobile-hidden-action-btn {
